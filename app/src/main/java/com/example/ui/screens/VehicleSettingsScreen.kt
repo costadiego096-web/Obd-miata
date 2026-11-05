@@ -276,6 +276,29 @@ fun VehicleSettingsScreen(
                     steps = 16,
                     colors = SliderDefaults.colors(thumbColor = RaceRed, activeTrackColor = RaceRed)
                 )
+
+                // IAT Heat-Soak Warning Temp
+                var iatAlarm by remember(config.iatWarningTempC) { mutableStateOf(config.iatWarningTempC) }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(text = "Allarme Heat-Soak Temp. Aria (IAT)", color = Color(0xFF8A99AC), fontSize = 12.sp)
+                    Text(
+                        text = "${iatAlarm.toInt()} °C",
+                        color = com.example.ui.theme.TurboBlue,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp
+                    )
+                }
+                Slider(
+                    value = iatAlarm,
+                    onValueChange = {
+                        iatAlarm = it
+                        viewModel.updateVehicleConfig(config.copy(iatWarningTempC = it))
+                    },
+                    valueRange = 35f..65f,
+                    steps = 15,
+                    colors = SliderDefaults.colors(thumbColor = com.example.ui.theme.TurboBlue, activeTrackColor = com.example.ui.theme.TurboBlue)
+                )
             }
         }
 

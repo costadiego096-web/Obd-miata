@@ -322,17 +322,34 @@ fun TrackTelemetryScreen(
             colors = CardDefaults.cardColors(containerColor = CockpitSurface),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceAround,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                QuickMetric("VELOCITÀ", "${String.format("%.0f", obdData.speedKmh)} km/h", Color.White)
-                QuickMetric("RPM", String.format("%.0f", obdData.rpm), if (obdData.isShiftLightActive) RaceRed else Mx5Amber)
-                QuickMetric("MARCIA", obdData.calculatedGear, TrackGreen)
-                QuickMetric("TEMP. ACQUA", "${String.format("%.0f", obdData.coolantTempC)}°C", if (obdData.isCoolantWarningActive) RaceRed else Color.White)
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    QuickMetric("VELOCITÀ", "${String.format("%.0f", obdData.speedKmh)} km/h", Color.White)
+                    QuickMetric("RPM", String.format("%.0f", obdData.rpm), if (obdData.isShiftLightActive) RaceRed else Mx5Amber)
+                    QuickMetric("MARCIA", obdData.calculatedGear, TrackGreen)
+                    QuickMetric("TEMP. ACQUA", "${String.format("%.0f", obdData.coolantTempC)}°C", if (obdData.isCoolantWarningActive) RaceRed else Color.White)
+                }
+
+                // Row 2: AFR and IAT
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    QuickMetric("RAPP. AFR", "${String.format("%.2f", obdData.afr)}:1", when (obdData.mixtureStatus) {
+                        com.example.model.MixtureStatus.RICH -> com.example.ui.theme.TurboBlue
+                        com.example.model.MixtureStatus.STOICHIOMETRIC -> TrackGreen
+                        com.example.model.MixtureStatus.LEAN -> com.example.ui.theme.WarningYellow
+                        com.example.model.MixtureStatus.CUTOFF -> RaceRed
+                    })
+                    QuickMetric("SONDA LAMBDA", "${String.format("%.3f", obdData.o2Voltage)} V", Color.White)
+                    QuickMetric("TEMP. ARIA (IAT)", "${String.format("%.1f", obdData.intakeTempC)} °C", if (obdData.isIatHeatSoakWarning) RaceRed else com.example.ui.theme.TurboBlue)
+                    QuickMetric("FARFALLA TPS", "${String.format("%.0f", obdData.throttlePosPct)} %", Mx5Amber)
+                }
             }
         }
     }

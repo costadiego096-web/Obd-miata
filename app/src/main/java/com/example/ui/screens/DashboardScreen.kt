@@ -25,13 +25,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Air
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,9 +48,11 @@ import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -53,22 +63,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.CustomWidgetSlot
 import com.example.model.DashboardLayoutType
 import com.example.model.DashboardWidgetId
 import com.example.model.LiveGForce
 import com.example.model.ObdData
 import com.example.model.VehicleConfig
+import com.example.model.WidgetDisplayStyle
+import com.example.ui.components.AfrGauge
 import com.example.ui.components.AnalogGauge
 import com.example.ui.components.FrictionCircle
 import com.example.ui.components.HorizontalBarGauge
+import com.example.ui.components.IatGauge
 import com.example.ui.components.ShiftLightBar
+import com.example.ui.components.SparklineGauge
 import com.example.ui.theme.CockpitBlack
 import com.example.ui.theme.CockpitOutline
 import com.example.ui.theme.CockpitSurface
@@ -91,11 +105,16 @@ fun DashboardScreen(
     val gForce by viewModel.combinedGForce.collectAsState()
     val config by viewModel.vehicleConfig.collectAsState()
     val layoutType by viewModel.dashboardLayout.collectAsState()
-    val gridWidgets by viewModel.gridWidgets.collectAsState()
+    val customSlots by viewModel.customSlots.collectAsState()
     val connState by viewModel.obdManager.connectionState.collectAsState()
     val connType by viewModel.obdManager.activeConnectionType.collectAsState()
 
-    var showWidgetPickerForSlot by remember { mutableStateOf<Int?>(null) }
+    val afrHistory by viewModel.afrHistory.collectAsState()
+    val iatHistory by viewModel.iatHistory.collectAsState()
+    val rpmHistory by viewModel.rpmHistory.collectAsState()
+
+    var showLayoutCustomizerSheet by remember { mutableStateOf(false) }
+    var slotBeingEdited by remember { mutableStateOf<Int?>(null) }
 
     Column(
         modifier = modifier
@@ -103,7 +122,7 @@ fun DashboardScreen(
             .background(CockpitBlack)
             .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
-        // Top Bar: Connection Badge, MX-5 NBFL Model tag, Layout Switcher
+        // Top Bar: Connection, VVT badge, Layout selector, Customize Button
         Row(
             modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -115,7 +134,7 @@ fun DashboardScreen(
                 modifier = Modifier
                     .clip(RoundedCornerShape(16.dp))
                     .background(CockpitSurfaceVariant)
-                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
             ) {
                 Box(
                     modifier = Modifier
@@ -134,57 +153,72 @@ fun DashboardScreen(
                 Text(
                     text = "${connType.name}: ${connState.statusLabel}",
                     color = Color.White,
-                    fontSize = 11.sp,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Medium
                 )
             }
 
-            // VVT Active Badge on NBFL
+            // S-VT Active Badge on NBFL
             if (obdData.isVvtActive) {
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .background(Mx5Amber)
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
-                    Text(
-                        text = "S-VT ATTIVO",
-                        color = Color.Black,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Black
-                    )
+                    Text(text = "S-VT", color = Color.Black, fontSize = 9.sp, fontWeight = FontWeight.Black)
                 }
             }
 
-            // Layout selector chips
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                DashboardLayoutType.values().forEach { type ->
-                    val isSelected = layoutType == type
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(if (isSelected) Mx5Amber else CockpitSurfaceVariant)
-                            .clickable { viewModel.setDashboardLayout(type) }
-                            .padding(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Text(
-                            text = when (type) {
-                                DashboardLayoutType.CLASSIC_NBFL -> "NBFL"
-                                DashboardLayoutType.RACE_COCKPIT -> "Pista"
-                                DashboardLayoutType.MODULAR_GRID -> "Griglia"
-                                DashboardLayoutType.HUD_MIRROR -> "HUD"
-                            },
-                            color = if (isSelected) Color.Black else Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
+            // Layout customizer button
+            Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Mx5Amber.copy(alpha = 0.2f))
+                    .clickable { showLayoutCustomizerSheet = true }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Default.Tune, contentDescription = null, tint = Mx5Amber, modifier = Modifier.size(14.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(text = "LAYOUT", color = Mx5Amber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+
+        // Layout switcher horizontal tabs
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            DashboardLayoutType.values().forEach { type ->
+                val isSelected = layoutType == type
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(if (isSelected) Mx5Amber else CockpitSurfaceVariant)
+                        .clickable { viewModel.setDashboardLayout(type) }
+                        .padding(vertical = 5.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = when (type) {
+                            DashboardLayoutType.CLASSIC_NBFL -> "NBFL"
+                            DashboardLayoutType.RACE_COCKPIT -> "Pista"
+                            DashboardLayoutType.AIR_FUEL_FOCUS -> "AFR / IAT"
+                            DashboardLayoutType.MODULAR_GRID -> "Griglia"
+                            DashboardLayoutType.HUD_MIRROR -> "HUD"
+                        },
+                        color = if (isSelected) Color.Black else Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium
+                    )
                 }
             }
         }
 
-        // Warning alerts banner (Coolant Overheat or Shift Light)
-        if (obdData.isCoolantWarningActive) {
+        // Alarms banner (Coolant Overheat or IAT Heat-Soak)
+        if (obdData.isCoolantWarningActive || obdData.isIatHeatSoakWarning) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -194,13 +228,17 @@ fun DashboardScreen(
                     .padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(Icons.Default.Warning, contentDescription = null, tint = Color.White)
+                Icon(Icons.Default.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "ALLARME TEMPERATURA LIQUIDO: ${String.format("%.1f", obdData.coolantTempC)}°C",
+                    text = if (obdData.isCoolantWarningActive) {
+                        "ALLARME TEMPERATURA ACQUA: ${String.format("%.1f", obdData.coolantTempC)}°C!"
+                    } else {
+                        "ATTENZIONE HEAT-SOAK IAT: ${String.format("%.1f", obdData.intakeTempC)}°C (Aria Calda in Aspirazione)"
+                    },
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp
+                    fontSize = 11.sp
                 )
             }
         }
@@ -210,6 +248,14 @@ fun DashboardScreen(
             DashboardLayoutType.CLASSIC_NBFL -> {
                 ClassicNbflDashboard(obdData = obdData, config = config)
             }
+            DashboardLayoutType.AIR_FUEL_FOCUS -> {
+                AirFuelFocusDashboard(
+                    obdData = obdData,
+                    config = config,
+                    afrHistory = afrHistory,
+                    iatHistory = iatHistory
+                )
+            }
             DashboardLayoutType.RACE_COCKPIT -> {
                 RaceCockpitDashboard(obdData = obdData, gForce = gForce, config = config)
             }
@@ -217,8 +263,11 @@ fun DashboardScreen(
                 ModularGridDashboard(
                     obdData = obdData,
                     gForce = gForce,
-                    widgets = gridWidgets,
-                    onWidgetClick = { slot -> showWidgetPickerForSlot = slot }
+                    slots = customSlots,
+                    afrHistory = afrHistory,
+                    iatHistory = iatHistory,
+                    rpmHistory = rpmHistory,
+                    onEditSlot = { slotIndex -> slotBeingEdited = slotIndex }
                 )
             }
             DashboardLayoutType.HUD_MIRROR -> {
@@ -227,42 +276,262 @@ fun DashboardScreen(
         }
     }
 
-    // Widget Slot Customization Dialog
-    showWidgetPickerForSlot?.let { slotIndex ->
-        AlertDialog(
-            onDismissRequest = { showWidgetPickerForSlot = null },
-            title = { Text("Personalizza Slot #${slotIndex + 1}", color = Color.White) },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        text = "Seleziona il parametro da visualizzare in questo quadrante:",
-                        color = Color(0xFFB0BCCB),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(bottom = 8.dp)
+    // Modal Bottom Sheet: Layout Customizer & Presets
+    if (showLayoutCustomizerSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showLayoutCustomizerSheet = false },
+            containerColor = CockpitSurface
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp, vertical = 12.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "PERSONALIZZAZIONE DASHBOARD",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Black
+                )
+                Text(
+                    text = "Scegli un assetto preimpostato o personalizza ogni singolo quadrante.",
+                    color = Color(0xFF8A99AC),
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = 14.dp)
+                )
+
+                // Layout Presets
+                Text(
+                    text = "ASSETTI PREIMPOSTATI",
+                    color = Mx5Amber,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 6.dp)
+                )
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PresetButton(
+                        title = "Carburazione (AFR & IAT)",
+                        subtitle = "Focus stechiometrico e temp aria",
+                        onClick = {
+                            viewModel.applyLayoutPreset("AFR_IAT_FOCUS")
+                            showLayoutCustomizerSheet = false
+                        },
+                        modifier = Modifier.weight(1f)
                     )
+                    PresetButton(
+                        title = "Pista Telemetria",
+                        subtitle = "G-meter, giri e shift light",
+                        onClick = {
+                            viewModel.applyLayoutPreset("TRACK_PERFORMANCE")
+                            showLayoutCustomizerSheet = false
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PresetButton(
+                        title = "Cluster NBFL Originale",
+                        subtitle = "Doppio quadrante analogico",
+                        onClick = {
+                            viewModel.applyLayoutPreset("CLASSIC_NBFL")
+                            showLayoutCustomizerSheet = false
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    PresetButton(
+                        title = "Griglia Modulare",
+                        subtitle = "6 slot completamente modificabili",
+                        onClick = {
+                            viewModel.applyLayoutPreset("FULL_GRID")
+                            showLayoutCustomizerSheet = false
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(18.dp))
+
+                // Slot Manager
+                Text(
+                    text = "QUADRANTI CONFIGURATI NELLA GRIGLIA (${customSlots.size} QUADRANTI)",
+                    color = Mx5Amber,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+
+                customSlots.forEachIndexed { index, slot ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(CockpitSurfaceVariant)
+                            .clickable {
+                                slotBeingEdited = index
+                                showLayoutCustomizerSheet = false
+                            }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "#${index + 1}",
+                                color = Mx5Amber,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "${slot.widgetId.title} (${slot.widgetId.unit})",
+                                    color = Color.White,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "Stile: ${slot.displayStyle.displayName}",
+                                    color = Color(0xFF8A99AC),
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Edit, contentDescription = "Modifica", tint = Color(0xFF8A99AC), modifier = Modifier.size(18.dp))
+                            if (customSlots.size > 2) {
+                                Spacer(modifier = Modifier.width(12.dp))
+                                IconButton(
+                                    onClick = { viewModel.removeCustomSlot(index) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Rimuovi", tint = RaceRed, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (customSlots.size < 8) {
+                    Button(
+                        onClick = {
+                            viewModel.addCustomSlot(DashboardWidgetId.AFR_RATIO, WidgetDisplayStyle.DIGITAL_CARD)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 10.dp)
+                            .height(44.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = CockpitSurfaceVariant),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = Mx5Amber)
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Aggiungi Quadrante alla Griglia", color = Color.White, fontSize = 12.sp)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+
+    // Slot Editing Dialog: Choose metric and visual style
+    slotBeingEdited?.let { slotIndex ->
+        val currentSlot = customSlots.getOrNull(slotIndex)
+        var selectedWidget by remember { mutableStateOf(currentSlot?.widgetId ?: DashboardWidgetId.AFR_RATIO) }
+        var selectedStyle by remember { mutableStateOf(currentSlot?.displayStyle ?: WidgetDisplayStyle.DIGITAL_CARD) }
+
+        AlertDialog(
+            onDismissRequest = { slotBeingEdited = null },
+            title = {
+                Text(text = "Configura Quadrante #${slotIndex + 1}", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Style Selector
+                    Text(text = "Stile di visualizzazione:", color = Mx5Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        WidgetDisplayStyle.values().forEach { style ->
+                            val isSel = selectedStyle == style
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(if (isSel) Mx5Amber else CockpitSurfaceVariant)
+                                    .clickable { selectedStyle = style }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = when (style) {
+                                        WidgetDisplayStyle.DIGITAL_CARD -> "Digitale"
+                                        WidgetDisplayStyle.ANALOG_DIAL -> "Analogico"
+                                        WidgetDisplayStyle.ARC_BAR -> "Barra"
+                                        WidgetDisplayStyle.SPARKLINE_CHART -> "Grafico"
+                                    },
+                                    color = if (isSel) Color.Black else Color.White,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                    }
+
+                    // Metric Selector
+                    Text(text = "Parametro OBD2 da mostrare:", color = Mx5Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     DashboardWidgetId.values().forEach { widget ->
+                        val isSel = selectedWidget == widget
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    viewModel.setGridWidget(slotIndex, widget)
-                                    showWidgetPickerForSlot = null
-                                }
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(if (isSel) Mx5Amber.copy(alpha = 0.2f) else CockpitSurfaceVariant)
+                                .clickable { selectedWidget = widget }
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(text = "${widget.title} (${widget.unit})", color = Color.White, fontSize = 14.sp)
-                            if (gridWidgets.getOrNull(slotIndex) == widget) {
-                                Icon(Icons.Default.Check, contentDescription = null, tint = Mx5Amber)
+                            Column {
+                                Text(
+                                    text = widget.title,
+                                    color = if (isSel) Mx5Amber else Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                                Text(text = "Unità: ${widget.unit}", color = Color(0xFF8A99AC), fontSize = 10.sp)
+                            }
+                            if (isSel) {
+                                Icon(Icons.Default.Check, contentDescription = null, tint = Mx5Amber, modifier = Modifier.size(18.dp))
                             }
                         }
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showWidgetPickerForSlot = null }) {
-                    Text("Chiudi", color = Mx5Amber)
+                Button(
+                    onClick = {
+                        viewModel.setCustomSlot(slotIndex, selectedWidget, selectedStyle)
+                        slotBeingEdited = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Mx5Amber)
+                ) {
+                    Text("Salva", color = Color.Black, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { slotBeingEdited = null }) {
+                    Text("Annulla", color = Color(0xFF8A99AC))
                 }
             },
             containerColor = CockpitSurface
@@ -270,8 +539,131 @@ fun DashboardScreen(
     }
 }
 
+@Composable
+private fun PresetButton(
+    title: String,
+    subtitle: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.clickable { onClick() },
+        colors = CardDefaults.cardColors(containerColor = CockpitSurfaceVariant),
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(modifier = Modifier.padding(10.dp)) {
+            Text(text = title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(text = subtitle, color = Color(0xFF8A99AC), fontSize = 10.sp)
+        }
+    }
+}
+
 /**
- * Authentic Mazda MX-5 NBFL Instrument Cluster Layout
+ * Dedicated Air-Fuel Ratio (AFR) & Intake Air Temperature (IAT) Focus Dashboard
+ */
+@Composable
+private fun AirFuelFocusDashboard(
+    obdData: ObdData,
+    config: VehicleConfig,
+    afrHistory: List<Float>,
+    iatHistory: List<Float>
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Shift Light Bar
+        ShiftLightBar(
+            currentRpm = obdData.rpm,
+            shiftLightRpm = config.shiftLightRpm.toFloat(),
+            redlineRpm = config.redlineRpm.toFloat()
+        )
+
+        // Hero 1: Rapporto Stechiometrico (AFR) su Sonda Lambda Originale NBFL
+        AfrGauge(
+            afr = obdData.afr,
+            lambda = obdData.lambdaRatio,
+            o2Voltage = obdData.o2Voltage,
+            mixtureStatus = obdData.mixtureStatus
+        )
+
+        // Hero 2: Temperatura Aria Aspirata (IAT)
+        IatGauge(
+            iatTempC = obdData.intakeTempC,
+            coolantTempC = obdData.coolantTempC,
+            warningThresholdC = config.iatWarningTempC
+        )
+
+        // Live Waveform Sparklines Row
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            SparklineGauge(
+                title = "Traccia AFR Live",
+                unit = ":1",
+                currentValue = obdData.afr,
+                history = afrHistory,
+                lineColor = when (obdData.mixtureStatus) {
+                    com.example.model.MixtureStatus.RICH -> TurboBlue
+                    com.example.model.MixtureStatus.STOICHIOMETRIC -> TrackGreen
+                    com.example.model.MixtureStatus.LEAN -> WarningYellow
+                    com.example.model.MixtureStatus.CUTOFF -> RaceRed
+                },
+                modifier = Modifier.weight(1f)
+            )
+
+            SparklineGauge(
+                title = "Traccia Temp. IAT",
+                unit = "°C",
+                currentValue = obdData.intakeTempC,
+                history = iatHistory,
+                lineColor = if (obdData.isIatHeatSoakWarning) RaceRed else TurboBlue,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        // Secondary Motor Metrics Bar
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = CockpitSurface),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(text = "CORRELAZIONE MOTORE & CARBURAZIONE", color = Color(0xFF8A99AC), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    QuickTelemetryStat("Giri Motore", "${String.format("%.0f", obdData.rpm)} RPM", if (obdData.isShiftLightActive) RaceRed else Mx5Amber)
+                    QuickTelemetryStat("Farfalla TPS", "${String.format("%.0f", obdData.throttlePosPct)} %", Color.White)
+                    QuickTelemetryStat("Anticipo", "${String.format("%.1f", obdData.timingAdvanceDeg)} °", ShiftCyan)
+                    QuickTelemetryStat("Temp. Acqua", "${String.format("%.0f", obdData.coolantTempC)} °C", if (obdData.isCoolantWarningActive) RaceRed else Color.White)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickTelemetryStat(label: String, value: String, color: Color) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(text = label, color = Color(0xFF8A99AC), fontSize = 10.sp)
+        Text(
+            text = value,
+            color = color,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Monospace
+        )
+    }
+}
+
+/**
+ * Classic Mazda MX-5 NBFL Cluster Layout with AFR and IAT Integration
  */
 @Composable
 private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
@@ -281,20 +673,18 @@ private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
             .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Sequential Shift Light Bar
         ShiftLightBar(
             currentRpm = obdData.rpm,
             shiftLightRpm = config.shiftLightRpm.toFloat(),
             redlineRpm = config.redlineRpm.toFloat(),
-            modifier = Modifier.padding(bottom = 8.dp)
+            modifier = Modifier.padding(bottom = 6.dp)
         )
 
-        // Main Dual Instrument Gauges: Tachometer (RPM) & Speedometer (km/h)
+        // Main Dual Gauges
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            // Tachometer with NBFL 7200 redline
             AnalogGauge(
                 value = obdData.rpm,
                 minValue = 0f,
@@ -307,35 +697,34 @@ private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
                 modifier = Modifier.weight(1f)
             )
 
-            // Speedometer
             AnalogGauge(
                 value = obdData.speedKmh,
                 minValue = 0f,
                 maxValue = 240f,
                 title = "Velocità",
                 unit = "km/h",
-                redlineStart = 220f,
+                redlineStart = null,
                 majorTickStep = 20f,
                 minorTicksPerMajor = 1,
                 modifier = Modifier.weight(1f)
             )
         }
 
-        // Center Gear & Power Badge
+        // Center Gear & AFR Strip
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(vertical = 6.dp),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Gear indicator
+            // Gear badge
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(CockpitSurfaceVariant)
                     .border(2.dp, Mx5Amber, RoundedCornerShape(12.dp))
-                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                    .padding(horizontal = 20.dp, vertical = 6.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -343,51 +732,67 @@ private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
                     Text(
                         text = obdData.calculatedGear,
                         color = Color.White,
-                        fontSize = 32.sp,
+                        fontSize = 30.sp,
                         fontWeight = FontWeight.Black,
                         fontFamily = FontFamily.Monospace
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
-            // Estimated HP & Torque
+            // AFR & IAT Quick Pill
             Column(
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(CockpitSurfaceVariant)
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
-                Text(
-                    text = "POTENZA: ${String.format("%.0f", obdData.calculatedHp)} CV",
-                    color = Mx5Amber,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = "COPPIA: ${String.format("%.0f", obdData.calculatedTorqueNm)} Nm",
-                    color = Color.White,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "AFR: ", color = Color(0xFF8A99AC), fontSize = 12.sp)
+                    Text(
+                        text = "${String.format("%.2f", obdData.afr)} : 1",
+                        color = when (obdData.mixtureStatus) {
+                            com.example.model.MixtureStatus.RICH -> TurboBlue
+                            com.example.model.MixtureStatus.STOICHIOMETRIC -> TrackGreen
+                            com.example.model.MixtureStatus.LEAN -> WarningYellow
+                            com.example.model.MixtureStatus.CUTOFF -> RaceRed
+                        },
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "Temp. Aria: ", color = Color(0xFF8A99AC), fontSize = 12.sp)
+                    Text(
+                        text = "${String.format("%.1f", obdData.intakeTempC)} °C",
+                        color = if (obdData.isIatHeatSoakWarning) RaceRed else Color.White,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
 
-        // Ancillary Gauges Row (NBFL Auxiliary Cluster)
+        // Ancillary Gauges Card
         Card(
             modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             colors = CardDefaults.cardColors(containerColor = CockpitSurface),
             shape = RoundedCornerShape(12.dp)
         ) {
             Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "PARAMETRI SECONDARI MOTORE",
-                    color = Color(0xFF8A99AC),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
+                Text(text = "MONITOR SENSORI MOTORE NBFL", color = Color(0xFF8A99AC), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+
+                HorizontalBarGauge(
+                    label = "Temp. Aria Aspirata (IAT)",
+                    value = obdData.intakeTempC,
+                    unit = "°C",
+                    minValue = 10f,
+                    maxValue = 70f,
+                    warningThreshold = 45f,
+                    dangerThreshold = config.iatWarningTempC
                 )
 
                 HorizontalBarGauge(
@@ -409,20 +814,11 @@ private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
                 )
 
                 HorizontalBarGauge(
-                    label = "Anticipo Accensione (Timing)",
-                    value = obdData.timingAdvanceDeg,
-                    unit = "° BTDC",
-                    minValue = 0f,
-                    maxValue = 45f
-                )
-
-                HorizontalBarGauge(
-                    label = "Tensione Batteria / Alternatore",
-                    value = obdData.batteryVoltage,
+                    label = "Tensione Sonda Lambda (O2)",
+                    value = obdData.o2Voltage,
                     unit = "V",
-                    minValue = 10f,
-                    maxValue = 16f,
-                    warningThreshold = 11.8f
+                    minValue = 0f,
+                    maxValue = 1f
                 )
             }
         }
@@ -447,32 +843,30 @@ private fun RaceCockpitDashboard(obdData: ObdData, gForce: LiveGForce, config: V
             modifier = Modifier.padding(bottom = 6.dp)
         )
 
-        // Massive Center Speed & Gear
+        // Center Speed & Gear
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .background(CockpitSurface)
-                .padding(16.dp),
+                .padding(14.dp),
             horizontalArrangement = Arrangement.SpaceAround,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Speed
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = String.format("%.0f", obdData.speedKmh),
                     color = Color.White,
-                    fontSize = 58.sp,
+                    fontSize = 54.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace
                 )
-                Text(text = "KM/H", color = Mx5Amber, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                Text(text = "KM/H", color = Mx5Amber, fontSize = 11.sp, fontWeight = FontWeight.Bold)
             }
 
-            // Gear Box
             Box(
                 modifier = Modifier
-                    .size(90.dp)
+                    .size(86.dp)
                     .clip(RoundedCornerShape(14.dp))
                     .background(CockpitSurfaceVariant)
                     .border(3.dp, if (obdData.isShiftLightActive) RaceRed else Mx5Amber, RoundedCornerShape(14.dp)),
@@ -481,28 +875,27 @@ private fun RaceCockpitDashboard(obdData: ObdData, gForce: LiveGForce, config: V
                 Text(
                     text = obdData.calculatedGear,
                     color = if (obdData.isShiftLightActive) RaceRed else Color.White,
-                    fontSize = 52.sp,
+                    fontSize = 48.sp,
                     fontWeight = FontWeight.Black,
                     fontFamily = FontFamily.Monospace
                 )
             }
 
-            // RPM
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = String.format("%.0f", obdData.rpm),
                     color = if (obdData.isShiftLightActive) RaceRed else Color.White,
-                    fontSize = 34.sp,
+                    fontSize = 32.sp,
                     fontWeight = FontWeight.Bold,
                     fontFamily = FontFamily.Monospace
                 )
-                Text(text = "GIRI/MIN", color = Color(0xFF8A99AC), fontSize = 12.sp)
+                Text(text = "GIRI/MIN", color = Color(0xFF8A99AC), fontSize = 11.sp)
             }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Live G-Meter & Throttle/Brake Status
+        // Live G-Meter & Telemetry Card
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -512,20 +905,19 @@ private fun RaceCockpitDashboard(obdData: ObdData, gForce: LiveGForce, config: V
                 modifier = Modifier.weight(1.2f)
             )
 
-            // Right side telemetry telemetry card
             Card(
                 modifier = Modifier.weight(1f),
                 colors = CardDefaults.cardColors(containerColor = CockpitSurface),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(text = "LIVE TELEMETRIA", color = Color(0xFF8A99AC), fontSize = 11.sp, fontWeight = FontWeight.Bold)
 
+                    TelemetryMetricItem("Rapporto AFR", "${String.format("%.1f", obdData.afr)}:1", TrackGreen)
+                    TelemetryMetricItem("Temp. Aria (IAT)", "${String.format("%.0f", obdData.intakeTempC)} °C", if (obdData.isIatHeatSoakWarning) RaceRed else TurboBlue)
                     TelemetryMetricItem("TPS Farfalla", "${String.format("%.0f", obdData.throttlePosPct)} %", Mx5Amber)
-                    TelemetryMetricItem("Temp. Acqua", "${String.format("%.1f", obdData.coolantTempC)} °C", if (obdData.isCoolantWarningActive) RaceRed else Color.White)
-                    TelemetryMetricItem("Aspirazione", "${String.format("%.1f", obdData.intakeTempC)} °C", TurboBlue)
-                    TelemetryMetricItem("Anticipo", "${String.format("%.1f", obdData.timingAdvanceDeg)} °", Color.White)
-                    TelemetryMetricItem("Flusso MAF", "${String.format("%.1f", obdData.mafFlowRateGps)} g/s", ShiftCyan)
+                    TelemetryMetricItem("Temp. Acqua", "${String.format("%.0f", obdData.coolantTempC)} °C", if (obdData.isCoolantWarningActive) RaceRed else Color.White)
+                    TelemetryMetricItem("Anticipo", "${String.format("%.1f", obdData.timingAdvanceDeg)} °", ShiftCyan)
                 }
             }
         }
@@ -543,7 +935,7 @@ private fun TelemetryMetricItem(label: String, value: String, valueColor: Color)
         Text(
             text = value,
             color = valueColor,
-            fontSize = 13.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
             fontFamily = FontFamily.Monospace
         )
@@ -551,22 +943,30 @@ private fun TelemetryMetricItem(label: String, value: String, valueColor: Color)
 }
 
 /**
- * Modular Grid Layout: 6 customizable tiles where user can tap and pick any parameter
+ * Modular Grid Layout: Supports custom display styles (Digital Card, Analog Gauge, Arc Bar, Sparkline)
  */
 @Composable
 private fun ModularGridDashboard(
     obdData: ObdData,
     gForce: LiveGForce,
-    widgets: List<DashboardWidgetId>,
-    onWidgetClick: (Int) -> Unit
+    slots: List<CustomWidgetSlot>,
+    afrHistory: List<Float>,
+    iatHistory: List<Float>,
+    rpmHistory: List<Float>,
+    onEditSlot: (Int) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        Text(
-            text = "Tocca un quadrante per cambiare il parametro visualizzato",
-            color = Color(0xFF8A99AC),
-            fontSize = 11.sp,
-            modifier = Modifier.padding(bottom = 6.dp)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Tocca qualsiasi quadrante per cambiare parametro o stile",
+                color = Color(0xFF8A99AC),
+                fontSize = 11.sp
+            )
+        }
 
         LazyVerticalGrid(
             columns = GridCells.Fixed(2),
@@ -574,13 +974,15 @@ private fun ModularGridDashboard(
             verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxSize()
         ) {
-            itemsIndexed(widgets) { index, widget ->
-                ModularWidgetCard(
-                    slotIndex = index,
-                    widget = widget,
+            itemsIndexed(slots) { index, slot ->
+                ConfigurableWidgetCard(
+                    slot = slot,
                     obdData = obdData,
                     gForce = gForce,
-                    onClick = { onWidgetClick(index) }
+                    afrHistory = afrHistory,
+                    iatHistory = iatHistory,
+                    rpmHistory = rpmHistory,
+                    onClick = { onEditSlot(index) }
                 )
             }
         }
@@ -588,18 +990,23 @@ private fun ModularGridDashboard(
 }
 
 @Composable
-private fun ModularWidgetCard(
-    slotIndex: Int,
-    widget: DashboardWidgetId,
+private fun ConfigurableWidgetCard(
+    slot: CustomWidgetSlot,
     obdData: ObdData,
     gForce: LiveGForce,
+    afrHistory: List<Float>,
+    iatHistory: List<Float>,
+    rpmHistory: List<Float>,
     onClick: () -> Unit
 ) {
+    val widget = slot.widgetId
     val (valueStr, numValue, maxVal) = when (widget) {
+        DashboardWidgetId.AFR_RATIO -> Triple(String.format("%.2f", obdData.afr), obdData.afr, 18f)
+        DashboardWidgetId.INTAKE_TEMP -> Triple(String.format("%.1f", obdData.intakeTempC), obdData.intakeTempC, 80f)
+        DashboardWidgetId.LAMBDA_O2 -> Triple(String.format("%.3f", obdData.o2Voltage), obdData.o2Voltage, 1f)
         DashboardWidgetId.RPM -> Triple(String.format("%.0f", obdData.rpm), obdData.rpm, 8000f)
         DashboardWidgetId.SPEED -> Triple(String.format("%.0f", obdData.speedKmh), obdData.speedKmh, 240f)
         DashboardWidgetId.COOLANT -> Triple(String.format("%.1f", obdData.coolantTempC), obdData.coolantTempC, 120f)
-        DashboardWidgetId.INTAKE_TEMP -> Triple(String.format("%.1f", obdData.intakeTempC), obdData.intakeTempC, 80f)
         DashboardWidgetId.THROTTLE -> Triple(String.format("%.0f", obdData.throttlePosPct), obdData.throttlePosPct, 100f)
         DashboardWidgetId.TIMING_ADVANCE -> Triple(String.format("%.1f", obdData.timingAdvanceDeg), obdData.timingAdvanceDeg, 45f)
         DashboardWidgetId.MAF -> Triple(String.format("%.1f", obdData.mafFlowRateGps), obdData.mafFlowRateGps, 150f)
@@ -612,71 +1019,158 @@ private fun ModularWidgetCard(
         DashboardWidgetId.G_FORCE -> Triple(String.format("%.2f", gForce.totalG), gForce.totalG, 1.5f)
     }
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(130.dp)
-            .clickable { onClick() }
-            .testTag("widget_card_$slotIndex"),
-        colors = CardDefaults.cardColors(containerColor = CockpitSurface),
-        shape = RoundedCornerShape(12.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = widget.title,
-                    color = Color(0xFFB0BCCB),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "#${slotIndex + 1}",
-                    color = CockpitOutline,
-                    fontSize = 10.sp
+    when (slot.displayStyle) {
+        WidgetDisplayStyle.SPARKLINE_CHART -> {
+            val history = when (widget) {
+                DashboardWidgetId.AFR_RATIO -> afrHistory
+                DashboardWidgetId.INTAKE_TEMP -> iatHistory
+                DashboardWidgetId.RPM -> rpmHistory
+                else -> emptyList()
+            }
+            Box(modifier = Modifier.clickable { onClick() }) {
+                SparklineGauge(
+                    title = widget.title,
+                    unit = widget.unit,
+                    currentValue = numValue,
+                    history = history,
+                    lineColor = when (widget) {
+                        DashboardWidgetId.AFR_RATIO -> TrackGreen
+                        DashboardWidgetId.INTAKE_TEMP -> TurboBlue
+                        else -> Mx5Amber
+                    }
                 )
             }
-
-            Column {
-                Text(
-                    text = valueStr,
-                    color = Color.White,
-                    fontSize = 32.sp,
-                    fontWeight = FontWeight.Black,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    text = widget.unit,
-                    color = Mx5Amber,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            // Mini bar indicator
-            val fraction = (numValue / maxVal).coerceIn(0f, 1f)
-            Box(
+        }
+        WidgetDisplayStyle.ANALOG_DIAL -> {
+            Card(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(CockpitSurfaceVariant)
+                    .height(145.dp)
+                    .clickable { onClick() },
+                colors = CardDefaults.cardColors(containerColor = CockpitSurface),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CockpitOutline)
             ) {
-                Box(
+                    val majorStep = when {
+                        widget.maxVal >= 1000f -> 1000f
+                        widget.maxVal >= 200f -> 40f
+                        widget.maxVal >= 100f -> 20f
+                        widget.maxVal >= 50f -> 10f
+                        widget.maxVal >= 10f -> 2f
+                        else -> 0.2f
+                    }
+                    AnalogGauge(
+                        value = numValue,
+                        minValue = widget.minVal,
+                        maxValue = widget.maxVal,
+                        title = widget.title,
+                        unit = widget.unit,
+                        majorTickStep = majorStep,
+                        modifier = Modifier.size(130.dp)
+                    )
+            }
+        }
+        WidgetDisplayStyle.ARC_BAR -> {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(130.dp)
+                    .clickable { onClick() },
+                colors = CardDefaults.cardColors(containerColor = CockpitSurface),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CockpitOutline)
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(12.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(text = widget.title, color = Color(0xFFB0BCCB), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = "$valueStr ${widget.unit}",
+                        color = Color.White,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Black,
+                        fontFamily = FontFamily.Monospace
+                    )
+                    HorizontalBarGauge(
+                        label = "",
+                        value = numValue,
+                        unit = widget.unit,
+                        minValue = widget.minVal,
+                        maxValue = widget.maxVal
+                    )
+                }
+            }
+        }
+        WidgetDisplayStyle.DIGITAL_CARD -> {
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(130.dp)
+                    .clickable { onClick() }
+                    .testTag("widget_card_${slot.slotIndex}"),
+                colors = CardDefaults.cardColors(containerColor = CockpitSurface),
+                shape = RoundedCornerShape(12.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CockpitOutline)
+            ) {
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth(fraction)
-                        .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(Mx5Amber)
-                )
+                        .fillMaxSize()
+                        .padding(12.dp),
+                    verticalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = widget.title,
+                            color = Color(0xFFB0BCCB),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = "#${slot.slotIndex + 1}",
+                            color = CockpitOutline,
+                            fontSize = 10.sp
+                        )
+                    }
+
+                    Column {
+                        Text(
+                            text = valueStr,
+                            color = Color.White,
+                            fontSize = 30.sp,
+                            fontWeight = FontWeight.Black,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        Text(
+                            text = widget.unit,
+                            color = Mx5Amber,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Mini progress indicator
+                    val fraction = ((numValue - widget.minVal) / (widget.maxVal - widget.minVal)).coerceIn(0f, 1f)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp))
+                            .background(CockpitSurfaceVariant)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth(fraction)
+                                .height(4.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Mx5Amber)
+                        )
+                    }
+                }
             }
         }
     }
@@ -691,7 +1185,7 @@ private fun HudMirrorDashboard(obdData: ObdData) {
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .scale(scaleX = -1f, scaleY = 1f), // Mirror horizontally for windshield projection!
+            .scale(scaleX = -1f, scaleY = 1f),
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -700,40 +1194,40 @@ private fun HudMirrorDashboard(obdData: ObdData) {
                 color = Color.DarkGray,
                 fontSize = 12.sp,
                 fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 24.dp)
+                modifier = Modifier.padding(bottom = 20.dp)
             )
 
             Text(
                 text = String.format("%.0f", obdData.speedKmh),
                 color = TrackGreen,
-                fontSize = 90.sp,
+                fontSize = 80.sp,
                 fontWeight = FontWeight.Black,
                 fontFamily = FontFamily.Monospace
             )
             Text(
                 text = "KM/H",
                 color = TrackGreen,
-                fontSize = 20.sp,
+                fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "MARCIA: ${obdData.calculatedGear}",
+                text = "AFR: ${String.format("%.1f", obdData.afr)} | IAT: ${String.format("%.0f", obdData.intakeTempC)}°C",
                 color = Mx5Amber,
-                fontSize = 38.sp,
+                fontSize = 24.sp,
                 fontWeight = FontWeight.Black,
                 fontFamily = FontFamily.Monospace
             )
 
             Text(
-                text = "${String.format("%.0f", obdData.rpm)} RPM",
+                text = "MARCIA: ${obdData.calculatedGear} • ${String.format("%.0f", obdData.rpm)} RPM",
                 color = Color.White,
-                fontSize = 28.sp,
+                fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = FontFamily.Monospace,
-                modifier = Modifier.padding(top = 8.dp)
+                modifier = Modifier.padding(top = 10.dp)
             )
         }
     }

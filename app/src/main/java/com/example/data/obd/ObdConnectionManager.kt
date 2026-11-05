@@ -215,10 +215,34 @@ class ObdConnectionManager(
                 val mafResp = sendCommand("0110")
                 parseMaf(mafResp)?.let { currentMaf = it }
 
+                // Query Intake Air Temperature (PID 010F)
+                val iatResp = sendCommand("010F")
+                parseIat(iatResp)?.let { currentIat = it }
+
+                // Query Oxygen Sensor 1 Bank 1 Voltage (PID 0114)
+                var currentO2Volt = 0.45f
+                val o2Resp = sendCommand("0114")
+                parseO2Voltage(o2Resp)?.let { currentO2Volt = it }
+
+                // Calculate stoichiometric AFR from narrowband O2 voltage
+                val lambdaVal = if (currentO2Volt >= 0.45f) {
+                    (1.0f - (currentO2Volt - 0.45f) * 0.40f).coerceIn(0.75f, 1.0f)
+                } else {
+                    (1.0f + (0.45f - currentO2Volt) * 0.50f).coerceIn(1.0f, 1.30f)
+                }
+                val currentAfr = lambdaVal * 14.7f
+                val mixStatus = when {
+                    currentThrottle < 5f && currentRpm > 1800f -> com.example.model.MixtureStatus.CUTOFF
+                    currentAfr < 14.2f -> com.example.model.MixtureStatus.RICH
+                    currentAfr > 15.2f -> com.example.model.MixtureStatus.LEAN
+                    else -> com.example.model.MixtureStatus.STOICHIOMETRIC
+                }
+
                 // Calculate Gear from Speed and RPM
                 val gear = calculateGear(currentSpeed, currentRpm, config)
                 val shiftActive = currentRpm >= config.shiftLightRpm
                 val coolantWarning = currentCoolant >= config.coolantWarningTempC
+                val isIatWarning = currentIat >= config.iatWarningTempC
                 val isVvt = config.engineType == com.example.model.Mx5EngineType.BP_Z3_1_8_VVT && currentRpm > 4200f && currentThrottle > 40f
 
                 // Power estimate
@@ -239,9 +263,14 @@ class ObdConnectionManager(
                     calculatedHp = hp,
                     calculatedTorqueNm = torque,
                     calculatedGear = gear,
+                    o2Voltage = currentO2Volt,
+                    lambdaRatio = lambdaVal,
+                    afr = currentAfr,
+                    mixtureStatus = mixStatus,
                     isShiftLightActive = shiftActive,
                     isVvtActive = isVvt,
                     isCoolantWarningActive = coolantWarning,
+                    isIatHeatSoakWarning = isIatWarning,
                     timestamp = System.currentTimeMillis()
                 )
 
@@ -361,6 +390,26 @@ class ObdConnectionManager(
             val a = clean.substring(idx + 4, idx + 6).toIntOrNull(16) ?: return null
             val b = clean.substring(idx + 6, idx + 8).toIntOrNull(16) ?: return null
             return ((a * 256) + b) / 100f
+        }
+        return null
+    }
+
+    private fun parseIat(response: String): Float? {
+        val clean = response.replace(" ", "")
+        val idx = clean.indexOf("410F")
+        if (idx >= 0 && clean.length >= idx + 6) {
+            val a = clean.substring(idx + 4, idx + 6).toIntOrNull(16) ?: return null
+            return (a - 40).toFloat()
+        }
+        return null
+    }
+
+    private fun parseO2Voltage(response: String): Float? {
+        val clean = response.replace(" ", "")
+        val idx = clean.indexOf("4114")
+        if (idx >= 0 && clean.length >= idx + 6) {
+            val a = clean.substring(idx + 4, idx + 6).toIntOrNull(16) ?: return null
+            return (a / 200f) // Standard OBD2 PID 0114: Voltage = A / 200
         }
         return null
     }

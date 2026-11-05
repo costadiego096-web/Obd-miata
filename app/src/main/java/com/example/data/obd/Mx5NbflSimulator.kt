@@ -197,8 +197,54 @@ class Mx5NbflSimulator(
         // Coolant temperature: warms up to ~92C, rises under track load to ~98C
         coolant = (coolant + (if (throttle > 70f) 0.02f else -0.015f)).coerceIn(87f, 102f)
 
-        // Estimated power output
+        // Estimated engine load
         val engineLoad = (throttle * 0.85f + (engineRpm / redline) * 15f).coerceIn(12f, 100f)
+
+        // Intake Air Temperature (IAT - PID 010F)
+        // Airflow at high speed cools the intake, while high engine heat and full throttle warm it up
+        val speedCooling = (vehicleSpeed / 200f) * 4.0f
+        val engineHeatSoak = (engineLoad / 100f) * 12.0f
+        val calculatedIat = (26f + engineHeatSoak - speedCooling + sin(step * 0.05f).toFloat() * 1.5f).coerceIn(18f, 65f)
+        val isIatHeatSoak = calculatedIat >= config.iatWarningTempC
+
+        // Sonda Lambda O2 originale Narrowband (0-1V) & Rapporto Stechiometrico AFR (14.7:1)
+        val o2Volt: Float
+        val currentAfr: Float
+        val lambdaVal: Float
+        val mixStatus: com.example.model.MixtureStatus
+
+        when {
+            // Deceleration fuel cut-off (rilascio gas in marcia con giri elevati)
+            throttle < 5f && engineRpm > 1700f -> {
+                o2Volt = (0.04f + kotlin.math.abs(sin(step * 0.2f).toFloat()) * 0.02f).coerceIn(0.01f, 0.08f)
+                currentAfr = 18.2f + kotlin.math.abs(sin(step * 0.1f).toFloat()) * 0.5f
+                lambdaVal = currentAfr / 14.7f
+                mixStatus = com.example.model.MixtureStatus.CUTOFF
+            }
+            // Piena accelerazione WOT / Carico elevato (Open Loop - Miscela Ricca per potenza e sicurezza)
+            throttle > 75f -> {
+                o2Volt = (0.87f + (throttle / 100f) * 0.06f + sin(step * 0.3f).toFloat() * 0.02f).coerceIn(0.85f, 0.95f)
+                currentAfr = 12.6f + (100f - throttle) * 0.025f // Tipico 12.6 - 13.2 AFR per BP-Z3 WOT
+                lambdaVal = currentAfr / 14.7f
+                mixStatus = com.example.model.MixtureStatus.RICH
+            }
+            // Andatura parziale moderata (Closed Loop - Oscillazione attorno a 14.7 stechiometrico)
+            else -> {
+                val wave = sin(step * 0.4f).toFloat() // Zirconia narrowband dither cycle
+                o2Volt = (0.45f + wave * 0.36f).coerceIn(0.08f, 0.88f)
+                currentAfr = 14.7f - (wave * 0.32f)
+                lambdaVal = currentAfr / 14.7f
+                mixStatus = if (currentAfr < 14.3f) {
+                    com.example.model.MixtureStatus.RICH
+                } else if (currentAfr > 15.2f) {
+                    com.example.model.MixtureStatus.LEAN
+                } else {
+                    com.example.model.MixtureStatus.STOICHIOMETRIC
+                }
+            }
+        }
+
+        // Estimated power output
         val powerFactor = when (config.engineType) {
             Mx5EngineType.BP_Z3_1_8_VVT -> 146f
             Mx5EngineType.B6_ZE_1_6 -> 110f
@@ -229,9 +275,9 @@ class Mx5NbflSimulator(
             rpm = engineRpm,
             speedKmh = vehicleSpeed,
             coolantTempC = coolant,
-            intakeTempC = 28f + (throttle * 0.08f),
+            intakeTempC = calculatedIat,
             throttlePosPct = throttle,
-            timingAdvanceDeg = timingAdvance,
+            timingAdvanceDeg = if (isIatHeatSoak) timingAdvance - 4.0f else timingAdvance,
             mafFlowRateGps = mafGps,
             manifoldPressureKpa = 32f + (throttle / 100f) * 68f, // 100 kPa atmospheric
             batteryVoltage = 14.1f - (engineRpm / 15000f),
@@ -242,9 +288,14 @@ class Mx5NbflSimulator(
             calculatedHp = estimatedHp,
             calculatedTorqueNm = estimatedTorque,
             calculatedGear = currentGear.toString(),
+            o2Voltage = o2Volt,
+            lambdaRatio = lambdaVal,
+            afr = currentAfr,
+            mixtureStatus = mixStatus,
             isShiftLightActive = shiftLightActive,
             isVvtActive = isVvt,
             isCoolantWarningActive = coolantWarning,
+            isIatHeatSoakWarning = isIatHeatSoak,
             timestamp = System.currentTimeMillis()
         )
     }

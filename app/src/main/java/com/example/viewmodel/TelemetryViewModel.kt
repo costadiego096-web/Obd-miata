@@ -56,17 +56,39 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
     private val _dashboardLayout = MutableStateFlow(DashboardLayoutType.CLASSIC_NBFL)
     val dashboardLayout: StateFlow<DashboardLayoutType> = _dashboardLayout.asStateFlow()
 
-    private val _gridWidgets = MutableStateFlow(
+    private val _customSlots = MutableStateFlow(
         listOf(
+            com.example.model.CustomWidgetSlot(0, DashboardWidgetId.AFR_RATIO, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+            com.example.model.CustomWidgetSlot(1, DashboardWidgetId.INTAKE_TEMP, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+            com.example.model.CustomWidgetSlot(2, DashboardWidgetId.RPM, com.example.model.WidgetDisplayStyle.ANALOG_DIAL),
+            com.example.model.CustomWidgetSlot(3, DashboardWidgetId.SPEED, com.example.model.WidgetDisplayStyle.ANALOG_DIAL),
+            com.example.model.CustomWidgetSlot(4, DashboardWidgetId.COOLANT, com.example.model.WidgetDisplayStyle.ARC_BAR),
+            com.example.model.CustomWidgetSlot(5, DashboardWidgetId.THROTTLE, com.example.model.WidgetDisplayStyle.ARC_BAR)
+        )
+    )
+    val customSlots: StateFlow<List<com.example.model.CustomWidgetSlot>> = _customSlots.asStateFlow()
+
+    // Backward-compatible grid widgets mapping
+    val gridWidgets: StateFlow<List<DashboardWidgetId>> = MutableStateFlow(
+        listOf(
+            DashboardWidgetId.AFR_RATIO,
+            DashboardWidgetId.INTAKE_TEMP,
             DashboardWidgetId.SPEED,
             DashboardWidgetId.RPM,
             DashboardWidgetId.COOLANT,
-            DashboardWidgetId.THROTTLE,
-            DashboardWidgetId.TIMING_ADVANCE,
-            DashboardWidgetId.G_FORCE
+            DashboardWidgetId.THROTTLE
         )
-    )
-    val gridWidgets: StateFlow<List<DashboardWidgetId>> = _gridWidgets.asStateFlow()
+    ).asStateFlow()
+
+    // Live waveform buffers for sparkline graph widgets
+    private val _afrHistory = MutableStateFlow<List<Float>>(emptyList())
+    val afrHistory: StateFlow<List<Float>> = _afrHistory.asStateFlow()
+
+    private val _iatHistory = MutableStateFlow<List<Float>>(emptyList())
+    val iatHistory: StateFlow<List<Float>> = _iatHistory.asStateFlow()
+
+    private val _rpmHistory = MutableStateFlow<List<Float>>(emptyList())
+    val rpmHistory: StateFlow<List<Float>> = _rpmHistory.asStateFlow()
 
     // Live G-Force (merged sensor + OBD/sim)
     private val _combinedGForce = MutableStateFlow(LiveGForce())
@@ -120,6 +142,11 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
                 }
                 _combinedGForce.value = gForce
 
+                // Update live waveform buffers for sparkline graph widgets
+                updateHistoryBuffer(_afrHistory, liveData.afr)
+                updateHistoryBuffer(_iatHistory, liveData.intakeTempC)
+                updateHistoryBuffer(_rpmHistory, liveData.rpm)
+
                 // Shift light vibration alert
                 if (liveData.isShiftLightActive) {
                     triggerShiftVibration()
@@ -136,6 +163,13 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    private fun updateHistoryBuffer(bufferFlow: MutableStateFlow<List<Float>>, newValue: Float) {
+        val current = bufferFlow.value.toMutableList()
+        current.add(newValue)
+        if (current.size > 35) current.removeAt(0)
+        bufferFlow.value = current
+    }
+
     override fun onCleared() {
         super.onCleared()
         obdManager.disconnect()
@@ -148,11 +182,78 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
         _dashboardLayout.value = layout
     }
 
-    fun setGridWidget(slotIndex: Int, widget: DashboardWidgetId) {
-        val current = _gridWidgets.value.toMutableList()
+    fun setCustomSlot(slotIndex: Int, widgetId: DashboardWidgetId, style: com.example.model.WidgetDisplayStyle) {
+        val current = _customSlots.value.toMutableList()
         if (slotIndex in current.indices) {
-            current[slotIndex] = widget
-            _gridWidgets.value = current
+            current[slotIndex] = com.example.model.CustomWidgetSlot(slotIndex, widgetId, style)
+            _customSlots.value = current
+        }
+    }
+
+    fun addCustomSlot(widgetId: DashboardWidgetId, style: com.example.model.WidgetDisplayStyle) {
+        val current = _customSlots.value.toMutableList()
+        if (current.size < 8) {
+            current.add(com.example.model.CustomWidgetSlot(current.size, widgetId, style))
+            _customSlots.value = current
+        }
+    }
+
+    fun removeCustomSlot(slotIndex: Int) {
+        val current = _customSlots.value.toMutableList()
+        if (current.size > 2 && slotIndex in current.indices) {
+            current.removeAt(slotIndex)
+            val reindexed = current.mapIndexed { idx, slot -> slot.copy(slotIndex = idx) }
+            _customSlots.value = reindexed
+        }
+    }
+
+    fun applyLayoutPreset(presetName: String) {
+        when (presetName) {
+            "AFR_IAT_FOCUS" -> {
+                _dashboardLayout.value = DashboardLayoutType.AIR_FUEL_FOCUS
+                _customSlots.value = listOf(
+                    com.example.model.CustomWidgetSlot(0, DashboardWidgetId.AFR_RATIO, com.example.model.WidgetDisplayStyle.SPARKLINE_CHART),
+                    com.example.model.CustomWidgetSlot(1, DashboardWidgetId.INTAKE_TEMP, com.example.model.WidgetDisplayStyle.SPARKLINE_CHART),
+                    com.example.model.CustomWidgetSlot(2, DashboardWidgetId.LAMBDA_O2, com.example.model.WidgetDisplayStyle.ARC_BAR),
+                    com.example.model.CustomWidgetSlot(3, DashboardWidgetId.THROTTLE, com.example.model.WidgetDisplayStyle.ARC_BAR),
+                    com.example.model.CustomWidgetSlot(4, DashboardWidgetId.TIMING_ADVANCE, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(5, DashboardWidgetId.COOLANT, com.example.model.WidgetDisplayStyle.DIGITAL_CARD)
+                )
+            }
+            "TRACK_PERFORMANCE" -> {
+                _dashboardLayout.value = DashboardLayoutType.RACE_COCKPIT
+                _customSlots.value = listOf(
+                    com.example.model.CustomWidgetSlot(0, DashboardWidgetId.RPM, com.example.model.WidgetDisplayStyle.ANALOG_DIAL),
+                    com.example.model.CustomWidgetSlot(1, DashboardWidgetId.SPEED, com.example.model.WidgetDisplayStyle.ANALOG_DIAL),
+                    com.example.model.CustomWidgetSlot(2, DashboardWidgetId.G_FORCE, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(3, DashboardWidgetId.COOLANT, com.example.model.WidgetDisplayStyle.ARC_BAR),
+                    com.example.model.CustomWidgetSlot(4, DashboardWidgetId.AFR_RATIO, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(5, DashboardWidgetId.INTAKE_TEMP, com.example.model.WidgetDisplayStyle.DIGITAL_CARD)
+                )
+            }
+            "CLASSIC_NBFL" -> {
+                _dashboardLayout.value = DashboardLayoutType.CLASSIC_NBFL
+            }
+            "FULL_GRID" -> {
+                _dashboardLayout.value = DashboardLayoutType.MODULAR_GRID
+                _customSlots.value = listOf(
+                    com.example.model.CustomWidgetSlot(0, DashboardWidgetId.AFR_RATIO, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(1, DashboardWidgetId.INTAKE_TEMP, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(2, DashboardWidgetId.RPM, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(3, DashboardWidgetId.SPEED, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(4, DashboardWidgetId.COOLANT, com.example.model.WidgetDisplayStyle.DIGITAL_CARD),
+                    com.example.model.CustomWidgetSlot(5, DashboardWidgetId.THROTTLE, com.example.model.WidgetDisplayStyle.DIGITAL_CARD)
+                )
+            }
+        }
+    }
+
+    fun setGridWidget(slotIndex: Int, widget: DashboardWidgetId) {
+        val current = _customSlots.value.toMutableList()
+        if (slotIndex in current.indices) {
+            val existing = current[slotIndex]
+            current[slotIndex] = existing.copy(widgetId = widget)
+            _customSlots.value = current
         }
     }
 

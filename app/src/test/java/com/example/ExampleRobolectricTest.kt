@@ -37,4 +37,15 @@ class ExampleRobolectricTest {
         assertEquals(7200, config.redlineRpm)
         assertEquals(6800, config.shiftLightRpm)
     }
+
+    @Test
+    fun `verify stoichiometric calculation from lambda`() {
+        val lambdaStoich = 1.0f
+        val afrStoich = lambdaStoich * 14.7f
+        assertEquals(14.7f, afrStoich, 0.01f)
+
+        val lambdaRich = 0.85f
+        val afrRich = lambdaRich * 14.7f
+        assertTrue(afrRich < 13.0f)
+    }
 }

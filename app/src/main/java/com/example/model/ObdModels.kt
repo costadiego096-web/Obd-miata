@@ -22,9 +22,9 @@ data class VehicleConfig(
     val redlineRpm: Int = 7200,
     val shiftLightRpm: Int = 6800,
     val coolantWarningTempC: Float = 104f,
+    val iatWarningTempC: Float = 50f,
     val vehicleWeightKg: Int = 1065
 ) {
-    // Calculates tire circumference in meters
     val tireCircumferenceMeters: Float
         get() {
             val tireSidewallMm = tireWidthMm * (tireAspectPct / 100.0f)
@@ -33,11 +33,18 @@ data class VehicleConfig(
         }
 }
 
+enum class MixtureStatus(val label: String, val description: String) {
+    RICH("RICCA (POTENZA)", "Miscela grassa ricca di benzina per massima potenza WOT"),
+    STOICHIOMETRIC("STECHIOMETRICA (14.7)", "Rapporto ideale stechiometrico lambda = 1.00"),
+    LEAN("MAGRA (CRUISE)", "Miscela magra a basso consumo in crociera"),
+    CUTOFF("CUT-OFF (RILASCIO)", "Iniezione carburante interrotta in rilascio")
+}
+
 data class ObdData(
     val rpm: Float = 850f,
     val speedKmh: Float = 0f,
     val coolantTempC: Float = 88f,
-    val intakeTempC: Float = 26f,
+    val intakeTempC: Float = 26f, // Temperatura Aria Aspirata (IAT PID 010F)
     val throttlePosPct: Float = 0f,
     val timingAdvanceDeg: Float = 14f,
     val mafFlowRateGps: Float = 3.4f,
@@ -50,9 +57,18 @@ data class ObdData(
     val calculatedHp: Float = 0f,
     val calculatedTorqueNm: Float = 0f,
     val calculatedGear: String = "N",
+
+    // Sonda Lambda originale Narrowband NBFL (0-1V) e Rapporto Stechiometrico AFR (PID 0114 / 0124)
+    val o2Voltage: Float = 0.46f,         // Tensione sonda lambda anteriore (0.05V - 0.95V)
+    val lambdaRatio: Float = 1.00f,       // Coefficiente Lambda λ (1.00 = 14.7:1)
+    val afr: Float = 14.7f,               // Rapporto Aria / Benzina (Air-Fuel Ratio, es. 14.7 : 1)
+    val mixtureStatus: MixtureStatus = MixtureStatus.STOICHIOMETRIC,
+
+    // Status flags
     val isShiftLightActive: Boolean = false,
     val isVvtActive: Boolean = false,
     val isCoolantWarningActive: Boolean = false,
+    val isIatHeatSoakWarning: Boolean = false, // Temp aria aspirata troppo calda (>50°C)
     val timestamp: Long = System.currentTimeMillis()
 )
 
@@ -71,29 +87,45 @@ enum class ObdConnectionType {
     SIMULATOR
 }
 
-enum class DashboardLayoutType(val displayName: String) {
-    CLASSIC_NBFL("Quadranti NBFL"),
-    RACE_COCKPIT("Cockpit Pista"),
-    MODULAR_GRID("Griglia Modulare"),
-    HUD_MIRROR("HUD Parabrezza")
+enum class DashboardLayoutType(val displayName: String, val iconDesc: String) {
+    CLASSIC_NBFL("Quadranti NBFL", "Design strumentazione originale con lancette arancioni"),
+    RACE_COCKPIT("Cockpit Pista", "Display da gara con contagiri, shift light e G-meter"),
+    AIR_FUEL_FOCUS("Carburazione & IAT", "Focus su rapporto stechiometrico AFR e temp. aria"),
+    MODULAR_GRID("Griglia Personalizzata", "Layout modulare con widget configurabili a piacere"),
+    HUD_MIRROR("HUD Parabrezza", "Proiezione a specchio per parabrezza")
 }
 
-enum class DashboardWidgetId(val title: String, val unit: String, val maxVal: Float) {
-    RPM("Giri Motore", "RPM", 8000f),
-    SPEED("Velocità", "km/h", 240f),
-    COOLANT("Temp. Acqua", "°C", 130f),
-    INTAKE_TEMP("Temp. Aspirazione", "°C", 90f),
-    THROTTLE("Farfalla (TPS)", "%", 100f),
-    TIMING_ADVANCE("Anticipo", "°", 45f),
-    MAF("Flusso Aria (MAF)", "g/s", 160f),
-    MANIFOLD_PRESSURE("Pressione Coll.", "bar", 1.5f),
-    BATTERY("Tensione Batteria", "V", 16f),
-    FUEL_TRIM("Correzione Miscela", "%", 25f),
-    ENGINE_LOAD("Carico Motore", "%", 100f),
-    POWER_HP("Potenza Stimata", "CV", 250f),
-    TORQUE_NM("Coppia Stimata", "Nm", 280f),
-    G_FORCE("Accelerazione G", "G", 1.8f)
+enum class WidgetDisplayStyle(val displayName: String) {
+    DIGITAL_CARD("Scheda Digitale"),
+    ANALOG_DIAL("Quadrante Analogico"),
+    ARC_BAR("Barra Curva"),
+    SPARKLINE_CHART("Grafico Andamento Live")
 }
+
+enum class DashboardWidgetId(val title: String, val unit: String, val maxVal: Float, val minVal: Float = 0f) {
+    AFR_RATIO("Rapp. Stechiometrico (AFR)", ":1", 18.0f, 10.0f),
+    INTAKE_TEMP("Temp. Aria Aspirata (IAT)", "°C", 90f, -20f),
+    LAMBDA_O2("Tensione Lambda O2", "V", 1.0f, 0f),
+    COOLANT("Temp. Liquido (ECT)", "°C", 130f, 0f),
+    RPM("Giri Motore", "RPM", 8000f, 0f),
+    SPEED("Velocità", "km/h", 240f, 0f),
+    THROTTLE("Farfalla (TPS)", "%", 100f, 0f),
+    TIMING_ADVANCE("Anticipo Accensione", "°", 45f, 0f),
+    MAF("Flusso Aria (MAF)", "g/s", 160f, 0f),
+    MANIFOLD_PRESSURE("Pressione Coll.", "bar", 1.5f, 0f),
+    BATTERY("Tensione Batteria", "V", 16f, 10f),
+    FUEL_TRIM("Correzione Miscela", "%", 25f, -25f),
+    ENGINE_LOAD("Carico Motore", "%", 100f, 0f),
+    POWER_HP("Potenza Stimata", "CV", 250f, 0f),
+    TORQUE_NM("Coppia Stimata", "Nm", 280f, 0f),
+    G_FORCE("Accelerazione G", "G", 1.8f, 0f)
+}
+
+data class CustomWidgetSlot(
+    val slotIndex: Int,
+    val widgetId: DashboardWidgetId,
+    val displayStyle: WidgetDisplayStyle = WidgetDisplayStyle.DIGITAL_CARD
+)
 
 data class DtcCode(
     val code: String,
