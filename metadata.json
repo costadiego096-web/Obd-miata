@@ -1,0 +1,6 @@
+{
+  "name": "MX-5 Telemetria",
+  "description": "App OBD2 e telemetria su pista per Mazda MX-5 NBFL con dashboard personalizzabile, registrazione sessioni e analisi prestazioni.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
