@@ -167,12 +167,13 @@ class ObdConnectionManager(
     }
 
     private suspend fun initElm327() {
-        log("ATZ -> ${sendCommand("ATZ", 4000)}")   // Reset ELM327 (i cloni possono metterci 1-3 s)
-        log("ATE0 -> ${sendCommand("ATE0")}")        // Echo off
-        log("ATL0 -> ${sendCommand("ATL0")}")        // Linefeeds off
-        log("ATS0 -> ${sendCommand("ATS0")}")        // Spaces off
-        log("ATH0 -> ${sendCommand("ATH0")}")        // Headers off
-        log("ATSP0 -> ${sendCommand("ATSP0")}")      // Auto protocol search
+        log("ATZ -> ${sendCommand("ATZ", 4000)}")    // Reset ELM327 (i cloni possono metterci 1-3 s)
+        log("ATE0 -> ${sendCommand("ATE0")}")         // Echo off
+        log("ATL0 -> ${sendCommand("ATL0")}")         // Linefeeds off
+        log("ATS0 -> ${sendCommand("ATS0")}")         // Spaces off
+        log("ATH0 -> ${sendCommand("ATH0")}")         // Headers off
+        log("ATSP0 -> ${sendCommand("ATSP0")}")       // Auto protocol search
+        log("ATAT2 -> ${sendCommand("ATAT2")}")       // Adaptive timing aggressivo (riduce i timeout)
 
         // Il primo comando OBD fa partire la ricerca del protocollo. Sulla NB (ISO 9141-2 /
         // KWP, init lenta a 5 baud) puo' richiedere 5-15 s: senza questa attesa la risposta
@@ -191,53 +192,57 @@ class ObdConnectionManager(
         var currentThrottle = 0f
         var currentTiming = 12f
         var currentMaf = 3.0f
+        var currentO2Volt = 0.45f
         var currentVoltage = 14.0f
         var failedCycles = 0
+        var cycleCount = 0
 
         while (scope.isActive && _connectionState.value == ObdConnectionState.CONNECTED) {
             try {
-                // Query RPM (PID 010C) - high priority
-                val rpmResp = sendCommand("010C")
+                // ---- PID VELOCI: ogni ciclo (RPM, TPS) ----
+                val rpmResp = sendCommand("010C", 500)
                 val parsedRpm = parseRpm(rpmResp)
                 if (parsedRpm != null) {
                     currentRpm = parsedRpm
                     failedCycles = 0
                 } else {
                     failedCycles++
-                    // Mostra nel log cosa risponde davvero l'adattatore (es. NO DATA, UNABLE TO CONNECT)
                     if (failedCycles <= 3 || failedCycles % 20 == 0) {
                         log("010C senza dati validi: \"$rpmResp\"")
                     }
                 }
 
-                // Query Speed (PID 010D)
-                val speedResp = sendCommand("010D")
-                parseSpeed(speedResp)?.let { currentSpeed = it }
-
-                // Query Throttle Position (PID 0111)
-                val tpsResp = sendCommand("0111")
+                val tpsResp = sendCommand("0111", 500)
                 parseThrottle(tpsResp)?.let { currentThrottle = it }
 
-                // Periodic slower PIDs (Coolant 0105, Timing 010E, MAF 0110, Voltage ATRV)
-                val ectResp = sendCommand("0105")
-                parseCoolant(ectResp)?.let { currentCoolant = it }
+                // ---- PID MEDI: ogni 2 cicli (Speed) ----
+                if (cycleCount % 2 == 0) {
+                    val speedResp = sendCommand("010D", 500)
+                    parseSpeed(speedResp)?.let { currentSpeed = it }
+                }
 
-                val timingResp = sendCommand("010E")
-                parseTiming(timingResp)?.let { currentTiming = it }
+                // ---- PID MEDI-LENTI: ogni 5 cicli (Timing, MAF, O2) ----
+                if (cycleCount % 5 == 0) {
+                    val timingResp = sendCommand("010E", 500)
+                    parseTiming(timingResp)?.let { currentTiming = it }
 
-                val mafResp = sendCommand("0110")
-                parseMaf(mafResp)?.let { currentMaf = it }
+                    val mafResp = sendCommand("0110", 500)
+                    parseMaf(mafResp)?.let { currentMaf = it }
 
-                // Query Intake Air Temperature (PID 010F)
-                val iatResp = sendCommand("010F")
-                parseIat(iatResp)?.let { currentIat = it }
+                    val o2Resp = sendCommand("0114", 500)
+                    parseO2Voltage(o2Resp)?.let { currentO2Volt = it }
+                }
 
-                // Query Oxygen Sensor 1 Bank 1 Voltage (PID 0114)
-                var currentO2Volt = 0.45f
-                val o2Resp = sendCommand("0114")
-                parseO2Voltage(o2Resp)?.let { currentO2Volt = it }
+                // ---- PID LENTI: ogni 20 cicli (Coolant, IAT) ----
+                if (cycleCount % 20 == 0) {
+                    val ectResp = sendCommand("0105", 500)
+                    parseCoolant(ectResp)?.let { currentCoolant = it }
 
-                // Calculate stoichiometric AFR from narrowband O2 voltage
+                    val iatResp = sendCommand("010F", 500)
+                    parseIat(iatResp)?.let { currentIat = it }
+                }
+
+                // ---- Calcoli derivati ----
                 val lambdaVal = if (currentO2Volt >= 0.45f) {
                     (1.0f - (currentO2Volt - 0.45f) * 0.40f).coerceIn(0.75f, 1.0f)
                 } else {
@@ -256,10 +261,12 @@ class ObdConnectionManager(
                 val shiftActive = currentRpm >= config.shiftLightRpm
                 val coolantWarning = currentCoolant >= config.coolantWarningTempC
                 val isIatWarning = currentIat >= config.iatWarningTempC
-                val isVvt = config.engineType == com.example.model.Mx5EngineType.BP_Z3_1_8_VVT && currentRpm > 4200f && currentThrottle > 40f
+                val isVvt = config.engineType == com.example.model.Mx5EngineType.BP_Z3_1_8_VVT &&
+                            currentRpm > 4200f && currentThrottle > 40f
 
                 // Power estimate
-                val hp = (currentRpm / config.redlineRpm) * config.engineType.stockHp * (currentThrottle / 100f).coerceAtLeast(0.05f)
+                val hp = (currentRpm / config.redlineRpm) * config.engineType.stockHp *
+                         (currentThrottle / 100f).coerceAtLeast(0.05f)
                 val torque = if (currentRpm > 0) (hp * 7127f / currentRpm).coerceAtLeast(0f) else 0f
 
                 _obdData.value = ObdData(
@@ -287,7 +294,8 @@ class ObdConnectionManager(
                     timestamp = System.currentTimeMillis()
                 )
 
-                delay(40) // Allow adapter to buffer
+                cycleCount++
+                // NIENTE delay(40): il prompt '>' gia' sincronizza i comandi
             } catch (e: Exception) {
                 log("Errore lettura PID: ${e.message}")
                 delay(200)
@@ -315,7 +323,7 @@ class ObdConnectionManager(
         return closestGear
     }
 
-    private suspend fun sendCommand(cmd: String, timeoutMs: Long = 2500): String = withContext(Dispatchers.IO) {
+    private suspend fun sendCommand(cmd: String, timeoutMs: Long = 800): String = withContext(Dispatchers.IO) {
         val out = outputStream ?: return@withContext ""
         val inStream = inputStream ?: return@withContext ""
 
@@ -331,16 +339,17 @@ class ObdConnectionManager(
         val startTime = System.currentTimeMillis()
 
         // Si legge finche' non arriva il prompt '>' (fine risposta), controllando
-        // tutto il testo accumulato e non solo l'ultimo pezzo ricevuto
+        // tutto il testo accumulato e non solo l'ultimo pezzo ricevuto.
+        // Thread.sleep(1) invece di delay(10): molto piu' preciso sulla latenza.
         while (System.currentTimeMillis() - startTime < timeoutMs) {
             if (inStream.available() > 0) {
                 val read = inStream.read(buffer)
                 if (read > 0) {
                     sb.append(String(buffer, 0, read))
-                    if (sb.contains(">")) break
+                    if (sb.contains('>')) break
                 }
             } else {
-                delay(10)
+                Thread.sleep(1)
             }
         }
         sb.toString().replace(">", "").replace("\r", " ").replace("\n", " ").trim()
