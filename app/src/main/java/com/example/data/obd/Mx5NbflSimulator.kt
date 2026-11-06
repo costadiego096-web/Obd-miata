@@ -52,7 +52,15 @@ class Mx5NbflSimulator(
     private var peakAccel = 0f
 
     fun start(vehicleConfig: VehicleConfig = VehicleConfig()) {
-        if (isRunning) return
+        // Se già in esecuzione, ferma prima di ripartire con la nuova config
+        if (isRunning) {
+            stop()
+        }
+
+        // Reset completo dello stato simulazione: cruciale quando si cambia
+        // numero di marce (5 -> 6 o 6 -> 5) a caldo.
+        resetSimulationState(vehicleConfig)
+
         isRunning = true
         job = scope.launch(Dispatchers.Default) {
             var step = 0L
@@ -78,6 +86,23 @@ class Mx5NbflSimulator(
         _simulatedGForce.value = LiveGForce()
     }
 
+    /**
+     * Resetta lo stato fisico della simulazione. Da chiamare all'avvio o
+     * quando cambia la configurazione (in particolare il numero di marce).
+     */
+    private fun resetSimulationState(config: VehicleConfig) {
+        // La marcia deve essere sempre valida per la lista di rapporti attuale
+        currentGear = 1.coerceAtMost(config.transmission.ratios.size.coerceAtLeast(1))
+        engineRpm = 850f
+        vehicleSpeed = 0f
+        throttle = 0f
+        coolant = 88f
+        trackPhase = 0f
+        isBraking = false
+        isShifting = false
+        shiftTimer = 0f
+    }
+
     private fun updatePhysics(config: VehicleConfig, step: Long) {
         // Track cycle: 0..100% represents a lap with straights, turns, braking zones
         trackPhase = (trackPhase + 0.12f) % 100f
@@ -87,6 +112,15 @@ class Mx5NbflSimulator(
         val tireCirc = config.tireCircumferenceMeters
         val redline = config.redlineRpm.toFloat()
         val shiftRpm = config.shiftLightRpm.toFloat()
+
+        // Difesa in profondità: se la config è cambiata a caldo (es. 6 -> 5 marce)
+        // e currentGear è fuori range, riportalo al massimo consentito.
+        if (ratios.isNotEmpty() && currentGear > ratios.size) {
+            currentGear = ratios.size
+            engineRpm = (engineRpm * (ratios.last() / ratios.getOrElse(currentGear - 1) { ratios.last() }))
+                .coerceIn(1800f, redline)
+        }
+        if (currentGear < 1) currentGear = 1
 
         var targetThrottle: Float
         var targetLatG: Float
