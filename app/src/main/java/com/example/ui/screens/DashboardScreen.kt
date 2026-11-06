@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.Speed
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -820,103 +821,7 @@ private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
                     minValue = 0f,
                     maxValue = 1f
                 )
-            Modifica APK GitHub
-The user wants to add battery voltage to the classic NBFL dashboard. I need to integrate it into the ClassicNbflDashboard composable. There's already a HorizontalBarGauge in the "Ancillary Gauges Card" section. The easiest and most consistent way is to add another HorizontalBarGauge for battery voltage there. Also, given that they wanted the "dashboard principale", the classic layout IS the main dashboard.
-
-I could also add it as a pill in the center strip, but the HorizontalBarGauge is cleaner and matches the existing pattern. Let me add it to the ancillary gauges card.
-
-For battery voltage gauge:
-
-min: 10V, max: 16V
-
-Warning threshold: 12.5V (below this is concerning) - but for a bar gauge, "warning" means approaching danger... actually battery is a bit special because LOW is bad, not high. Let me think.
-
-Actually, for battery voltage the semantics are inverted compared to a temp gauge. A low value is bad, a high value (>15V) indicates overcharge/alternator issue.
-
-Looking at HorizontalBarGauge signature: warningThreshold and dangerThreshold - these are probably designed for values that go UP. For battery, low is bad.
-
-I could:
-
-Add it as a HorizontalBarGauge with "high" thresholds (e.g., 15.0 as warning, 15.5 as danger) - but that misses low voltage alerts
-
-Create a custom battery indicator with bidirectional thresholds
-
-Use HorizontalBarGauge but describe the semantics differently
-
-Actually let me be pragmatic: add as HorizontalBarGauge but with warningThreshold = 15.0f and dangerThreshold = 15.5f won't be correct. Better to add a custom mini-display or a dedicated battery widget.
-
-But I don't know HorizontalBarGauge's exact API semantics. Let me be safe: add a simple battery indicator built inline (like the pill I proposed) OR add as HorizontalBarGauge with reasonable thresholds but mention the caveat.
-
-Actually, the simplest and safest: add it as a HorizontalBarGauge with high thresholds that catch overcharge cases, AND add a custom-colored pill for low-voltage that's more informative.
-
-Wait, I should keep it simple. The user asked "add battery voltage to main dashboard". Let me just add it to the ancillary gauges card with HorizontalBarGauge. For thresholds:
-
-On a healthy system: 12.6V off, 14.4V running
-
-Danger low: <11.5V (won't start)
-
-Warning low: <12.5V
-
-Danger high: >15.0V (overcharge)
-
-Warning high: >14.8V
-
-Since HorizontalBarGauge probably only supports high thresholds, I'll use:
-
-min 10, max 16
-
-warningThreshold = 15.0
-
-dangerThreshold = 15.5
-
-And add a note that low voltage is not visually warned by this component but I can add a separate check.
-
-Actually, better approach: Add the horizontal bar for the visual consistency, but ALSO add a small colored text indicator showing the battery status. OR just show it as a plain horizontal bar and let the user know they can customize.
-
-Hmm, let me be practical. The best UX here would be to:
-
-Add a HorizontalBarGauge for consistency with the visual style
-
-But recognize battery is bidirectional
-
-Let me look at what would be most helpful. The user has a simple request. Let me deliver:
-
-The HorizontalBarGauge added with appropriate thresholds (high-side for overcharge)
-
-Plus a note that if they want low-voltage alert, I can add a specialized widget
-
-Actually the cleanest is to just add it. Let me provide the code change as a diff-style modification.
-
-Let me also remember that batteryVoltage needs to have real values. In simulator it currently does 14.1 - rpm/15000. In BT it's hardcoded to 14.0 unless ATRV fix applied.
-
-Let me give them:
-
-The modification to add battery HorizontalBarGauge in the ancillary gauges card
-
-Reminder about ATRV fix
-
-Optional: a nicer battery pill for the center strip
-
-Let me focus on delivering a clean, working solution.
-
-For the HorizontalBarGauge - I don't know if it takes optional parameters. Let me just use the standard params the user already uses.
-
-Actually, I want to propose a more useful thing: add battery voltage as another HorizontalBarGauge right after O2, using consistent styling. And warn about the threshold direction issue.
-
-Let me write this out clearly. I should:
-
-Show the modified ClassicNbflDashboard (or the modified section)
-
-Explain what changed and why
-
-Remind about the ATRV fix for real readings
-
-Let me also consider adding a low-voltage alert. Looking at the data model, there's no isBatteryWarningActive flag. So for a simple approach, I'll just show the numeric value with color based on value (inline logic) - use HorizontalBarGauge which auto-styles based on thresholds.
-
-For battery specifically: I'd invert the logic. Let me create a special horizontal bar for battery with custom color threshold.
-
-Actually wait, maybe I should just suggest the HorizontalBarGauge with high thresholds and warn the user. Let me deliver:
-
+            
 kotlin
 HorizontalBarGauge(
     label = "Tensione Batteria",
@@ -927,61 +832,6 @@ HorizontalBarGauge(
     warningThreshold = 15.0f,
     dangerThreshold = 15.5f
 )
-Plus, I want to add low voltage detection. Let me suggest adding a colored overlay or a supplementary text.
-
-Actually, let me think about this differently. The HorizontalBarGauge takes warningThreshold and dangerThreshold - these are probably "above this value = warning/danger". For battery:
-
-Below 12V = dead battery, danger
-
-12-13V = weak/warning
-
-13.5-14.8V = normal
-
-Above 15V = overcharge warning/danger
-
-So the standard "high = bad" logic works for overcharge but not for low.
-
-Two options:
-A) Use high thresholds only (catches overcharge, missing low voltage warnings)
-B) Add a specialized battery widget with custom rendering
-
-Let me propose option A as the immediate simple fix, and describe option B as a proper enhancement that I can provide if they want.
-
-Actually, I just realized - looking at the pill approach I suggested for the top bar, that handles bidirectional thresholds well with the color logic. So a hybrid approach:
-
-Add HorizontalBarGauge in ancillary card for consistency
-
-The top bar pill handles the bidirectional alert with colors
-
-That's a good combination.
-
-Let me finalize the answer:
-
-Add HorizontalBarGauge for battery to ClassicNbflDashboard ancillary card
-
-Note that the top-bar pill modification from before handles low-voltage case
-
-Remind about ATRV fix in ObdConnectionManager for real BT/WiFi readings
-
-Optional: note that the pill can be styled differently
-
-Let me write this concisely. The user just wants the code change, not a long explanation.
-
-I should provide:
-
-The modified ClassicNbflDashboard code (or just the diff area)
-
-Reminder about ancillary issues (ATRV)
-
-Let me write it out. I'll add the battery gauge right after O2 (last item before closing).
-
-Actually the thresholds... min 10f max 16f - if warning/danger are "above", then warning=15, danger=15.5 makes sense for overcharge protection. But most users care about LOW voltage (dead battery). Let me suggest a custom approach:
-
-For battery, use a wider range and place "warning" at a low value somehow. Actually - hmm. Looking at how the app uses warningThreshold - I don't have the HorizontalBarGauge code. Let me assume it's "high = bad".
-
-Best solution: Add battery as a special case with custom inline rendering. Show a colored text/pill directly in the ancillary card area instead of HorizontalBarGauge.
-
-Actually no, let me just be pragmatic:
 
 kotlin
 // Battery voltage with custom coloring (bidirectional)
@@ -1006,29 +856,6 @@ Row(
         fontSize = 13.sp
     )
 }
-This matches the visual style of the ancillary card and handles both directions.
-
-But to be consistent with the other rows which use HorizontalBarGauge, maybe I should use a bar. Let me offer BOTH:
-
-Actually, the HorizontalBarGauge has that visual bar which is nice for a "how full" view. For battery:
-
-10-16V range
-
-12V = empty (bar at 33%)
-
-14.4V = normal (bar at 73%)
-
-That's actually a decent visualization. Let me combine: use HorizontalBarGauge for the bar visual, but the thresholds need to work for low values.
-
-Hmm, I really don't know the exact semantics of HorizontalBarGauge's warningThreshold/dangerThreshold. Let me just provide the safest approach: add it with high thresholds (overcharge protection) AND add a small inline warning text below for low voltage.
-
-OR: skip HorizontalBarGauge and use the Row+Text approach for simplicity and correctness.
-
-Let me go with a clean Row+Text approach for battery in the ancillary card, plus optionally a HorizontalBarGauge if they want it styled the same. I'll recommend Row+Text with color coding.
-
-Actually, thinking more about it - the user just wants it added. Let me give them the simplest working solution and let them iterate:
-
-Add this to the ancillary card (bottom of ClassicNbflDashboard):
 
 kotlin
 // Battery voltage
@@ -1054,20 +881,6 @@ Row(
         fontSize = 14.sp
     )
 }
-Good. Simple, works, uses existing colors.
-
-Now let me write the full answer with the code provided.
-
-Also I should mention: the ATRV fix in ObdConnectionManager is still needed for real readings in BT/WiFi.
-
-And I should give the full modified ClassicNbflDashboard for copy-paste.
-
-Let me write it cleanly.
-
-Ecco la modifica. Il punto più naturale è in fondo alla card "Monitor Sensori Motore NBFL", dopo la sonda lambda. Aggiungo la tensione con colore semaforico bidirezionale (la batteria è l'unico parametro dove sia il valore troppo basso che troppo alto sono un problema), cosa che HorizontalBarGauge non gestisce bene perché è pensato solo per soglie "verso l'alto".
-
-Modifica al ClassicNbflDashboard
-Ti do il composable completo. L'unica aggiunta è il blocco finale in fondo alla Card (dopo la riga della sonda lambda O2); il resto è identico al tuo.
 
 kotlin
 /**
