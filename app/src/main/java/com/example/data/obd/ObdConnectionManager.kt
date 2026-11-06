@@ -167,18 +167,20 @@ class ObdConnectionManager(
     }
 
     private suspend fun initElm327() {
-        sendCommand("ATZ")   // Reset ELM327
-        delay(400)
-        sendCommand("ATE0")  // Echo off
-        delay(100)
-        sendCommand("ATL0")  // Linefeeds off
-        delay(100)
-        sendCommand("ATS0")  // Spaces off
-        delay(100)
-        sendCommand("ATH0")  // Headers off
-        delay(100)
-        sendCommand("ATSP0") // Auto protocol search (ISO 9141-2 / ISO 14230 / CAN)
-        delay(200)
+        log("ATZ -> ${sendCommand("ATZ", 4000)}")   // Reset ELM327 (i cloni possono metterci 1-3 s)
+        log("ATE0 -> ${sendCommand("ATE0")}")        // Echo off
+        log("ATL0 -> ${sendCommand("ATL0")}")        // Linefeeds off
+        log("ATS0 -> ${sendCommand("ATS0")}")        // Spaces off
+        log("ATH0 -> ${sendCommand("ATH0")}")        // Headers off
+        log("ATSP0 -> ${sendCommand("ATSP0")}")      // Auto protocol search
+
+        // Il primo comando OBD fa partire la ricerca del protocollo. Sulla NB (ISO 9141-2 /
+        // KWP, init lenta a 5 baud) puo' richiedere 5-15 s: senza questa attesa la risposta
+        // arriva in ritardo e finisce attaccata al comando successivo (sfasamento permanente).
+        log("Ricerca protocollo ECU (puo' richiedere fino a 15 s, quadro su ON)...")
+        val warmup = sendCommand("0100", 20000)
+        log("0100 -> $warmup")
+        log("Protocollo: ${sendCommand("ATDP")}")
     }
 
     private suspend fun runObdPollingLoop(config: VehicleConfig) {
@@ -190,12 +192,23 @@ class ObdConnectionManager(
         var currentTiming = 12f
         var currentMaf = 3.0f
         var currentVoltage = 14.0f
+        var failedCycles = 0
 
         while (scope.isActive && _connectionState.value == ObdConnectionState.CONNECTED) {
             try {
                 // Query RPM (PID 010C) - high priority
                 val rpmResp = sendCommand("010C")
-                parseRpm(rpmResp)?.let { currentRpm = it }
+                val parsedRpm = parseRpm(rpmResp)
+                if (parsedRpm != null) {
+                    currentRpm = parsedRpm
+                    failedCycles = 0
+                } else {
+                    failedCycles++
+                    // Mostra nel log cosa risponde davvero l'adattatore (es. NO DATA, UNABLE TO CONNECT)
+                    if (failedCycles <= 3 || failedCycles % 20 == 0) {
+                        log("010C senza dati validi: \"$rpmResp\"")
+                    }
+                }
 
                 // Query Speed (PID 010D)
                 val speedResp = sendCommand("010D")
@@ -302,34 +315,35 @@ class ObdConnectionManager(
         return closestGear
     }
 
-    private suspend fun sendCommand(cmd: String): String = withContext(Dispatchers.IO) {
+    private suspend fun sendCommand(cmd: String, timeoutMs: Long = 2500): String = withContext(Dispatchers.IO) {
         val out = outputStream ?: return@withContext ""
         val inStream = inputStream ?: return@withContext ""
+
+        // Svuota eventuali byte rimasti da risposte in ritardo, cosi' non si sfasano i comandi
+        val trash = ByteArray(256)
+        while (inStream.available() > 0) inStream.read(trash)
 
         out.write((cmd + "\r").toByteArray())
         out.flush()
 
         val buffer = ByteArray(256)
         val sb = StringBuilder()
-        var read: Int
         val startTime = System.currentTimeMillis()
 
-        while (System.currentTimeMillis() - startTime < 1200) {
+        // Si legge finche' non arriva il prompt '>' (fine risposta), controllando
+        // tutto il testo accumulato e non solo l'ultimo pezzo ricevuto
+        while (System.currentTimeMillis() - startTime < timeoutMs) {
             if (inStream.available() > 0) {
-                read = inStream.read(buffer)
+                val read = inStream.read(buffer)
                 if (read > 0) {
-                    val chunk = String(buffer, 0, read)
-                    sb.append(chunk)
-                    if (chunk.contains(">")) {
-                        break
-                    }
+                    sb.append(String(buffer, 0, read))
+                    if (sb.contains(">")) break
                 }
             } else {
                 delay(10)
             }
         }
-        val clean = sb.toString().replace(">", "").replace("\r", "").replace("\n", "").trim()
-        clean
+        sb.toString().replace(">", "").replace("\r", " ").replace("\n", " ").trim()
     }
 
     private fun parseRpm(response: String): Float? {
