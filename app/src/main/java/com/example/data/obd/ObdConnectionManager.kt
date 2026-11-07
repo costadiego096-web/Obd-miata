@@ -193,14 +193,14 @@ class ObdConnectionManager(
         var currentTiming = 12f
         var currentMaf = 3.0f
         var currentO2Volt = 0.45f
-        var currentVoltage = 14.0f
+        var currentVoltage = Float.NaN // NaN = non ancora letta (mostrata come "--")
         var failedCycles = 0
         var cycleCount = 0
 
         while (scope.isActive && _connectionState.value == ObdConnectionState.CONNECTED) {
             try {
                 // ---- PID VELOCI: ogni ciclo (RPM, TPS) ----
-                val rpmResp = sendCommand("010C", 500)
+                val rpmResp = sendPid("010C", 500)
                 val parsedRpm = parseRpm(rpmResp)
                 if (parsedRpm != null) {
                     currentRpm = parsedRpm
@@ -212,33 +212,41 @@ class ObdConnectionManager(
                     }
                 }
 
-                val tpsResp = sendCommand("0111", 500)
+                val tpsResp = sendPid("0111", 500)
                 parseThrottle(tpsResp)?.let { currentThrottle = it }
 
                 // ---- PID MEDI: ogni 2 cicli (Speed) ----
                 if (cycleCount % 2 == 0) {
-                    val speedResp = sendCommand("010D", 500)
+                    val speedResp = sendPid("010D", 500)
                     parseSpeed(speedResp)?.let { currentSpeed = it }
                 }
 
                 // ---- PID MEDI-LENTI: ogni 5 cicli (Timing, MAF, O2) ----
                 if (cycleCount % 5 == 0) {
-                    val timingResp = sendCommand("010E", 500)
+                    val timingResp = sendPid("010E", 500)
                     parseTiming(timingResp)?.let { currentTiming = it }
 
-                    val mafResp = sendCommand("0110", 500)
+                    val mafResp = sendPid("0110", 500)
                     parseMaf(mafResp)?.let { currentMaf = it }
 
-                    val o2Resp = sendCommand("0114", 500)
+                    val o2Resp = sendPid("0114", 500)
                     parseO2Voltage(o2Resp)?.let { currentO2Volt = it }
+                }
+
+                // ---- BATTERIA: ogni 10 cicli, con ATRV (misurata dall'adattatore sul pin 16) ----
+                if (cycleCount % 10 == 0) {
+                    val battResp = sendCommand("ATRV", 500)
+                    val v = parseBatteryVoltage(battResp)
+                    currentVoltage = v ?: Float.NaN
+                    if (v == null && cycleCount % 100 == 0) log("ATRV senza valore valido: \"$battResp\"")
                 }
 
                 // ---- PID LENTI: ogni 20 cicli (Coolant, IAT) ----
                 if (cycleCount % 20 == 0) {
-                    val ectResp = sendCommand("0105", 500)
+                    val ectResp = sendPid("0105", 500)
                     parseCoolant(ectResp)?.let { currentCoolant = it }
 
-                    val iatResp = sendCommand("010F", 500)
+                    val iatResp = sendPid("010F", 500)
                     parseIat(iatResp)?.let { currentIat = it }
                 }
 
@@ -353,6 +361,28 @@ class ObdConnectionManager(
             }
         }
         sb.toString().replace(">", "").replace("\r", " ").replace("\n", " ").trim()
+    }
+
+    // Con il suffisso "1" (es. "010C1") l'ELM327 risponde appena arriva la prima risposta
+    // della centralina, senza aspettare il timeout. Sulla linea K della NB fa guadagnare
+    // fino a ~200 ms per PID. Se l'adattatore non lo supporta (risponde "?"), si disattiva.
+    private var useResponseCount = true
+
+    private suspend fun sendPid(pid: String, timeoutMs: Long = 800): String {
+        if (!useResponseCount) return sendCommand(pid, timeoutMs)
+        val resp = sendCommand(pid + "1", timeoutMs)
+        if (resp.contains("?")) {
+            useResponseCount = false
+            log("Adattatore senza suffisso risposta: modalita' standard")
+            return sendCommand(pid, timeoutMs)
+        }
+        return resp
+    }
+
+    private fun parseBatteryVoltage(response: String): Float? {
+        val m = Regex("""(\d{1,2}(?:[.,]\d{1,2})?)\s*V""", RegexOption.IGNORE_CASE).find(response) ?: return null
+        val v = m.groupValues[1].replace(',', '.').toFloatOrNull() ?: return null
+        return if (v in 5f..20f) v else null
     }
 
     private fun parseRpm(response: String): Float? {
