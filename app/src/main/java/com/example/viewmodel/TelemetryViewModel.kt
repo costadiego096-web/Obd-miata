@@ -49,7 +49,9 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
     val gForceManager = GForceSensorManager(application)
 
     // Vehicle Configuration
-    private val _vehicleConfig = MutableStateFlow(VehicleConfig())
+    private val _vehicleConfig = MutableStateFlow(
+        com.example.data.VehicleConfigStore.load(application)
+    )
     val vehicleConfig: StateFlow<VehicleConfig> = _vehicleConfig.asStateFlow()
 
     // Dashboard Customization
@@ -259,6 +261,10 @@ class TelemetryViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun updateVehicleConfig(config: VehicleConfig) {
         _vehicleConfig.value = config
+        // Salvata su disco: resta dopo la chiusura dell'app
+        com.example.data.VehicleConfigStore.save(getApplication<Application>(), config)
+        // Letta subito dal ciclo OBD reale, senza riconnettere
+        obdManager.updateConfig(config)
         // If simulator is active, restart with new config
         if (obdManager.activeConnectionType.value == ObdConnectionType.SIMULATOR) {
             simulator.stop()
