@@ -824,6 +824,7 @@ private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
                 // ---- Tensione Batteria (B+) ----
                 val battV = obdData.batteryVoltage
                 val battColor = when {
+                    battV.isNaN() -> Color(0xFF8A99AC)
                     battV < 11.5f -> RaceRed       // batteria scarica / alternatore KO
                     battV < 12.5f -> WarningYellow // a motore spento: sotto carica
                     battV > 15.0f -> RaceRed       // sovraccarica / regolatore rotto
@@ -841,7 +842,7 @@ private fun ClassicNbflDashboard(obdData: ObdData, config: VehicleConfig) {
                         fontSize = 12.sp
                     )
                     Text(
-                        text = String.format(java.util.Locale.US, "%.1f V", battV),
+                        text = if (battV.isNaN()) "--" else String.format(java.util.Locale.US, "%.1f V", battV),
                         color = battColor,
                         fontWeight = FontWeight.Bold,
                         fontFamily = FontFamily.Monospace,
@@ -1039,7 +1040,7 @@ private fun ConfigurableWidgetCard(
         DashboardWidgetId.TIMING_ADVANCE -> Triple(String.format("%.1f", obdData.timingAdvanceDeg), obdData.timingAdvanceDeg, 45f)
         DashboardWidgetId.MAF -> Triple(String.format("%.1f", obdData.mafFlowRateGps), obdData.mafFlowRateGps, 150f)
         DashboardWidgetId.MANIFOLD_PRESSURE -> Triple(String.format("%.2f", obdData.manifoldPressureKpa / 100f), obdData.manifoldPressureKpa / 100f, 1.5f)
-        DashboardWidgetId.BATTERY -> Triple(String.format("%.2f", obdData.batteryVoltage), obdData.batteryVoltage, 16f)
+        DashboardWidgetId.BATTERY -> if (obdData.batteryVoltage.isNaN()) Triple("--", 0f, 16f) else Triple(String.format("%.2f", obdData.batteryVoltage), obdData.batteryVoltage, 16f)
         DashboardWidgetId.FUEL_TRIM -> Triple(String.format("%.1f", obdData.fuelTrimShortPct), obdData.fuelTrimShortPct, 25f)
         DashboardWidgetId.ENGINE_LOAD -> Triple(String.format("%.0f", obdData.engineLoadPct), obdData.engineLoadPct, 100f)
         DashboardWidgetId.POWER_HP -> Triple(String.format("%.0f", obdData.calculatedHp), obdData.calculatedHp, 200f)
