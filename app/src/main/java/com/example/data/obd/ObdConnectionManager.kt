@@ -55,6 +55,16 @@ class ObdConnectionManager(
     private val _rawLog = MutableStateFlow<List<String>>(emptyList())
     val rawLog: StateFlow<List<String>> = _rawLog.asStateFlow()
 
+    // Configurazione veicolo SEMPRE aggiornata: il ciclo di lettura la rilegge a ogni giro,
+    // cosi' le modifiche fatte nelle impostazioni (cambio, soglie...) valgono subito,
+    // senza dover riconnettere l'adattatore.
+    @Volatile
+    private var activeConfig: VehicleConfig = VehicleConfig()
+
+    fun updateConfig(config: VehicleConfig) {
+        activeConfig = config
+    }
+
     private var connectionJob: Job? = null
     private var btSocket: BluetoothSocket? = null
     private var wifiSocket: Socket? = null
@@ -73,6 +83,7 @@ class ObdConnectionManager(
     }
 
     fun startSimulator(vehicleConfig: VehicleConfig) {
+        activeConfig = vehicleConfig
         disconnect()
         _activeConnectionType.value = ObdConnectionType.SIMULATOR
         _connectionState.value = ObdConnectionState.CONNECTED
@@ -82,6 +93,7 @@ class ObdConnectionManager(
 
     @SuppressLint("MissingPermission")
     fun connectBluetooth(device: BluetoothDevice, vehicleConfig: VehicleConfig) {
+        activeConfig = vehicleConfig
         disconnect()
         _activeConnectionType.value = ObdConnectionType.BLUETOOTH_CLASSIC
         _connectionState.value = ObdConnectionState.CONNECTING
@@ -105,7 +117,7 @@ class ObdConnectionManager(
                 _connectionState.value = ObdConnectionState.CONNECTED
                 log("Connesso con successo alla centralina OBD2 Mazda MX-5!")
 
-                runObdPollingLoop(vehicleConfig)
+                runObdPollingLoop()
             } catch (e: Exception) {
                 log("Errore connessione Bluetooth: ${e.localizedMessage}")
                 _connectionState.value = ObdConnectionState.ERROR
@@ -115,6 +127,7 @@ class ObdConnectionManager(
     }
 
     fun connectWifi(ip: String = DEFAULT_WIFI_IP, port: Int = DEFAULT_WIFI_PORT, vehicleConfig: VehicleConfig) {
+        activeConfig = vehicleConfig
         disconnect()
         _activeConnectionType.value = ObdConnectionType.WIFI
         _connectionState.value = ObdConnectionState.CONNECTING
@@ -135,7 +148,7 @@ class ObdConnectionManager(
                 _connectionState.value = ObdConnectionState.CONNECTED
                 log("Connesso via Wi-Fi a centralina OBD2!")
 
-                runObdPollingLoop(vehicleConfig)
+                runObdPollingLoop()
             } catch (e: Exception) {
                 log("Errore connessione Wi-Fi: ${e.localizedMessage}")
                 _connectionState.value = ObdConnectionState.ERROR
@@ -184,7 +197,8 @@ class ObdConnectionManager(
         log("Protocollo: ${sendCommand("ATDP")}")
     }
 
-    private suspend fun runObdPollingLoop(config: VehicleConfig) {
+    private suspend fun runObdPollingLoop() {
+        resetGearTracking()
         var currentRpm = 800f
         var currentSpeed = 0f
         var currentCoolant = 85f
@@ -264,8 +278,11 @@ class ObdConnectionManager(
                     else -> com.example.model.MixtureStatus.STOICHIOMETRIC
                 }
 
+                // Config riletta a ogni ciclo (vale subito se cambi cambio/soglie)
+                val config = activeConfig
+
                 // Calculate Gear from Speed and RPM
-                val gear = calculateGear(currentSpeed, currentRpm, config)
+                val gear = stabilizeGear(calculateGear(currentSpeed, currentRpm, config))
                 val shiftActive = currentRpm >= config.shiftLightRpm
                 val coolantWarning = currentCoolant >= config.coolantWarningTempC
                 val isIatWarning = currentIat >= config.iatWarningTempC
@@ -311,24 +328,56 @@ class ObdConnectionManager(
         }
     }
 
-    private fun calculateGear(speedKmh: Float, rpm: Float, config: VehicleConfig): String {
+    /**
+     * Marcia istantanea da velocita' e giri: "N" se fermo, null se nessuna marcia e' compatibile
+     * (frizione premuta, slittamento, transitorio), altrimenti "1".."6".
+     *
+     * Si confronta il rapporto osservato (giri motore / giri ruota) con quello di ogni marcia,
+     * in percentuale: e' piu' preciso del confronto sui giri assoluti, e la tolleranza cresce a
+     * bassa velocita' perche' la velocita' OBD e' un numero intero di km/h.
+     */
+    private fun calculateGear(speedKmh: Float, rpm: Float, config: VehicleConfig): String? {
         if (speedKmh < 5f || rpm < 500f) return "N"
-        val tireCirc = config.tireCircumferenceMeters
-        val finalDrive = config.finalDriveRatio
-        val speedMps = speedKmh / 3.6f
+        val wheelRps = (speedKmh / 3.6f) / config.tireCircumferenceMeters
+        val observedRatio = (rpm / 60f) / (wheelRps * config.finalDriveRatio)
+        val tolerance = 0.10f + 0.5f / speedKmh
 
-        var closestGear = "N"
-        var minDiff = Float.MAX_VALUE
-
+        var bestGear: String? = null
+        var bestError = Float.MAX_VALUE
         config.transmission.ratios.forEachIndexed { index, ratio ->
-            val expectedRpm = (speedMps * ratio * finalDrive / tireCirc) * 60f
-            val diff = kotlin.math.abs(rpm - expectedRpm)
-            if (diff < minDiff && diff < (rpm * 0.22f)) {
-                minDiff = diff
-                closestGear = (index + 1).toString()
+            val error = kotlin.math.abs(observedRatio - ratio) / ratio
+            if (error < bestError) {
+                bestError = error
+                bestGear = (index + 1).toString()
             }
         }
-        return closestGear
+        return if (bestError <= tolerance) bestGear else null
+    }
+
+    // --- Stabilizzazione: la marcia cambia solo dopo piu' letture uguali di fila ---
+    private var confirmedGear = "N"
+    private var gearCandidate = "N"
+    private var gearCandidateCount = 0
+
+    private fun resetGearTracking() {
+        confirmedGear = "N"
+        gearCandidate = "N"
+        gearCandidateCount = 0
+    }
+
+    private fun stabilizeGear(raw: String?): String {
+        if (raw == "N") {
+            resetGearTracking()
+            return "N"
+        }
+        // Nessuna marcia compatibile (frizione premuta / transitorio): si tiene l'ultima nota
+        if (raw == null) return confirmedGear
+        if (raw == gearCandidate) gearCandidateCount++ else {
+            gearCandidate = raw
+            gearCandidateCount = 1
+        }
+        if (gearCandidateCount >= 3) confirmedGear = raw
+        return confirmedGear
     }
 
     private suspend fun sendCommand(cmd: String, timeoutMs: Long = 800): String = withContext(Dispatchers.IO) {
