@@ -175,7 +175,19 @@ fun VehicleSettingsScreen(
                                 .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isSelected) Mx5Amber else CockpitSurfaceVariant)
-                                .clickable { viewModel.updateVehicleConfig(config.copy(transmission = trans)) }
+                                .clickable {
+                                    viewModel.updateVehicleConfig(
+                                        config.copy(
+                                            transmission = trans,
+                                            // Differenziale standard del cambio scelto (modificabile sotto)
+                                            finalDriveRatio = when {
+                                                trans == config.transmission -> config.finalDriveRatio
+                                                trans == Mx5Transmission.SIX_SPEED -> 3.909f
+                                                else -> 4.100f
+                                            }
+                                        )
+                                    )
+                                }
                                 .padding(vertical = 12.dp),
                             contentAlignment = Alignment.Center
                         ) {
