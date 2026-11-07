@@ -210,10 +210,42 @@ class ObdConnectionManager(
         var currentVoltage = Float.NaN // NaN = non ancora letta (mostrata come "--")
         var failedCycles = 0
         var cycleCount = 0
+        var slowIndex = 0
+        var battFailCount = 0
+        var statStart = System.nanoTime()
+
+        // Legge un valore secondario (TPS, O2, anticipo, MAF, temperature, batteria)
+        suspend fun readSlow(kind: String) {
+            when (kind) {
+                "TPS" -> parseThrottle(sendPid("0111", 500))?.let { currentThrottle = it }
+                "O2" -> parseO2Voltage(sendPid("0114", 500))?.let { currentO2Volt = it }
+                "TIMING" -> parseTiming(sendPid("010E", 500))?.let { currentTiming = it }
+                "MAF" -> parseMaf(sendPid("0110", 500))?.let { currentMaf = it }
+                "ECT" -> parseCoolant(sendPid("0105", 500))?.let { currentCoolant = it }
+                "IAT" -> parseIat(sendPid("010F", 500))?.let { currentIat = it }
+                "BATT" -> {
+                    // ATRV: tensione misurata dall'adattatore sul pin 16 della presa OBD
+                    val battResp = sendCommand("ATRV", 500)
+                    val v = parseBatteryVoltage(battResp)
+                    currentVoltage = v ?: Float.NaN
+                    if (v == null) {
+                        battFailCount++
+                        if (battFailCount <= 3) log("ATRV senza valore valido: \"$battResp\"")
+                    }
+                }
+            }
+        }
+
+        // Lettura iniziale di tutti i valori, cosi' non si vedono valori inventati all'avvio
+        try {
+            for (kind in listOf("TPS", "O2", "TIMING", "MAF", "ECT", "IAT", "BATT")) readSlow(kind)
+        } catch (e: Exception) {
+            log("Lettura iniziale parziale: ${e.message}")
+        }
 
         while (scope.isActive && _connectionState.value == ObdConnectionState.CONNECTED) {
             try {
-                // ---- PID VELOCI: ogni ciclo (RPM, TPS) ----
+                // ---- RPM e VELOCITA': a ogni ciclo, cosi' giri e marcia sono sempre freschi ----
                 val rpmResp = sendPid("010C", 500)
                 val parsedRpm = parseRpm(rpmResp)
                 if (parsedRpm != null) {
@@ -226,42 +258,15 @@ class ObdConnectionManager(
                     }
                 }
 
-                val tpsResp = sendPid("0111", 500)
-                parseThrottle(tpsResp)?.let { currentThrottle = it }
+                val speedResp = sendPid("010D", 500)
+                parseSpeed(speedResp)?.let { currentSpeed = it }
 
-                // ---- PID MEDI: ogni 2 cicli (Speed) ----
-                if (cycleCount % 2 == 0) {
-                    val speedResp = sendPid("010D", 500)
-                    parseSpeed(speedResp)?.let { currentSpeed = it }
-                }
-
-                // ---- PID MEDI-LENTI: ogni 5 cicli (Timing, MAF, O2) ----
-                if (cycleCount % 5 == 0) {
-                    val timingResp = sendPid("010E", 500)
-                    parseTiming(timingResp)?.let { currentTiming = it }
-
-                    val mafResp = sendPid("0110", 500)
-                    parseMaf(mafResp)?.let { currentMaf = it }
-
-                    val o2Resp = sendPid("0114", 500)
-                    parseO2Voltage(o2Resp)?.let { currentO2Volt = it }
-                }
-
-                // ---- BATTERIA: ogni 10 cicli, con ATRV (misurata dall'adattatore sul pin 16) ----
-                if (cycleCount % 10 == 0) {
-                    val battResp = sendCommand("ATRV", 500)
-                    val v = parseBatteryVoltage(battResp)
-                    currentVoltage = v ?: Float.NaN
-                    if (v == null && cycleCount % 100 == 0) log("ATRV senza valore valido: \"$battResp\"")
-                }
-
-                // ---- PID LENTI: ogni 20 cicli (Coolant, IAT) ----
-                if (cycleCount % 20 == 0) {
-                    val ectResp = sendPid("0105", 500)
-                    parseCoolant(ectResp)?.let { currentCoolant = it }
-
-                    val iatResp = sendPid("010F", 500)
-                    parseIat(iatResp)?.let { currentIat = it }
+                // ---- Un solo valore "secondario" a rotazione, un ciclo si' e uno no ----
+                // Prima c'erano cicli con 9 richieste di fila (ogni 5/10/20 cicli) che facevano
+                // "fermare" giri e marcia per un attimo: ora il tempo di ogni ciclo e' costante.
+                if (cycleCount % 2 == 1) {
+                    readSlow(slowRotation[slowIndex % slowRotation.size])
+                    slowIndex++
                 }
 
                 // ---- Calcoli derivati ----
@@ -320,6 +325,12 @@ class ObdConnectionManager(
                 )
 
                 cycleCount++
+                if (cycleCount % 100 == 0) {
+                    val now = System.nanoTime()
+                    val msPerCycle = (now - statStart) / 1_000_000f / 100f
+                    log(String.format(java.util.Locale.US, "Lettura: %.0f ms/ciclo (%.1f aggiornamenti/s)", msPerCycle, 1000f / msPerCycle))
+                    statStart = now
+                }
                 // NIENTE delay(40): il prompt '>' gia' sincronizza i comandi
             } catch (e: Exception) {
                 log("Errore lettura PID: ${e.message}")
@@ -354,6 +365,13 @@ class ObdConnectionManager(
         return if (bestError <= tolerance) bestGear else null
     }
 
+    // Rotazione dei valori secondari: la farfalla (TPS) ogni 2 posti, la sonda lambda 3 volte su 16,
+    // gli altri una volta sola ogni giro completo
+    private val slowRotation = listOf(
+        "TPS", "O2", "TPS", "TIMING", "TPS", "O2", "TPS", "MAF",
+        "TPS", "O2", "TPS", "ECT", "TPS", "IAT", "TPS", "BATT"
+    )
+
     // --- Stabilizzazione: la marcia cambia solo dopo piu' letture uguali di fila ---
     private var confirmedGear = "N"
     private var gearCandidate = "N"
@@ -376,7 +394,7 @@ class ObdConnectionManager(
             gearCandidate = raw
             gearCandidateCount = 1
         }
-        if (gearCandidateCount >= 3) confirmedGear = raw
+        if (gearCandidateCount >= 2) confirmedGear = raw
         return confirmedGear
     }
 
